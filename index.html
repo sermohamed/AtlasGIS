@@ -569,28 +569,41 @@
       font-size: 11px; padding: 3px 6px;
     }
 
-    /* ─── Draw defaults (near draw toolbar) ─── */
+    /* ─── Draw defaults (inside draw toolbar stack) ─── */
     #draw-defaults {
-      position: absolute;
-      top: 10px;
-      left: 52px;
-      z-index: 4;
+      position: static;
+      pointer-events: auto;
       display: flex;
       flex-direction: column;
       gap: 4px;
-      max-width: min(240px, calc(100vw - 120px));
+      max-width: min(280px, calc(100vw - 120px));
     }
     #draw-defaults .dd-toggle {
-      width: 36px; height: 36px;
-      border-radius: 6px;
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      border-radius: 8px;
       background: var(--bg-2);
-      border: 1px solid var(--line-strong);
+      border: 1px solid var(--line);
       color: var(--ink-0);
       cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: var(--shadow);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+      transition: background 0.12s, border-color 0.12s;
+      -webkit-tap-highlight-color: transparent;
     }
-    #draw-defaults .dd-toggle.active { border-color: var(--brand); color: var(--brand); }
+    #draw-defaults .dd-toggle:hover { background: var(--bg-3); }
+    #draw-defaults .dd-toggle.active {
+      border-color: var(--brand);
+      background: rgba(58,160,255,0.15);
+      color: var(--brand);
+    }
+    @media (max-width: 600px) {
+      #draw-defaults .dd-toggle { width: 44px; height: 44px; }
+    }
     #draw-defaults .dd-panel {
       display: none;
       background: var(--bg-2);
@@ -599,16 +612,18 @@
       padding: 10px;
       box-shadow: var(--shadow);
       font-size: 12px;
+      pointer-events: auto;
     }
     #draw-defaults.open .dd-panel { display: block; }
     #draw-defaults .dd-row { margin-bottom: 8px; }
     #draw-defaults .dd-row:last-child { margin-bottom: 0; }
     #draw-defaults .field-label { font-size: 10px; margin-bottom: 3px; }
-    #draw-defaults select.field, #draw-defaults input[type="color"] {
-      width: 100%; min-height: 30px;
+    #draw-defaults select.field { width: 100%; min-height: 30px; }
+    #draw-defaults .dd-new-group {
+      margin-top: 4px;
+      width: 100%;
+      font-size: 11px;
     }
-    #draw-defaults .dd-colors { display: flex; gap: 6px; align-items: center; }
-    #draw-defaults .dd-colors input[type="color"] { width: 36px; height: 30px; padding: 0; flex-shrink: 0; }
 
     .empty-state {
       text-align: center;
@@ -895,7 +910,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-01·t (calques+style)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-03·u (calques+style fixes)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -954,29 +969,50 @@
 
     <!-- ═════ MAP AREA ═════ -->
     <main id="map-area">
-      <!-- Defaults applied to every newly drawn object -->
+      <!-- Defaults applied to every newly drawn object (mounted into #draw-dropdown-wrapper by JS) -->
       <div id="draw-defaults">
         <button type="button" class="dd-toggle" id="dd-toggle" title="Défauts pour nouveaux objets" aria-label="Défauts pour nouveaux objets">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2"/></svg>
         </button>
         <div class="dd-panel" id="dd-panel">
           <div class="dd-row">
             <label class="field-label">Couche cible</label>
             <select id="dd-group" class="field"></select>
+            <button type="button" class="btn btn-ghost dd-new-group" id="dd-new-group">+ Nouvelle couche</button>
           </div>
-          <div class="dd-row dd-colors">
-            <div style="flex:1;">
-              <label class="field-label">Contour</label>
+          <div class="dd-row">
+            <label class="field-label">Contour</label>
+            <div class="color-row">
               <input type="color" id="dd-stroke" />
-            </div>
-            <div style="flex:1;">
-              <label class="field-label">Remplissage</label>
-              <input type="color" id="dd-fill" />
+              <input type="text" id="dd-stroke-hex" class="field" />
             </div>
           </div>
           <div class="dd-row">
-            <label class="field-label">Opacité remplissage</label>
-            <input type="range" id="dd-opacity" min="0" max="1" step="0.05" style="width:100%;" />
+            <label class="field-label">Épaisseur</label>
+            <div class="slider-row">
+              <input type="range" id="dd-width" min="0.5" max="10" step="0.5" />
+              <span class="val" id="dd-width-val">2.5</span>
+            </div>
+          </div>
+          <div class="dd-row">
+            <label class="field-label">Remplissage</label>
+            <div class="color-row">
+              <input type="color" id="dd-fill" />
+              <input type="text" id="dd-fill-hex" class="field" />
+            </div>
+          </div>
+          <div class="dd-row">
+            <label class="field-label">Opacité</label>
+            <div class="slider-row">
+              <input type="range" id="dd-opacity" min="0" max="1" step="0.05" />
+              <span class="val" id="dd-opacity-val">30%</span>
+            </div>
+          </div>
+          <div class="dd-row">
+            <label class="checkbox-row">
+              <input type="checkbox" id="dd-label" />
+              <span>Masquer l'étiquette</span>
+            </label>
           </div>
           <div style="font-size:10px; color:var(--ink-2); margin-top:6px;">S'applique aux prochains objets dessinés.</div>
         </div>
@@ -1084,7 +1120,7 @@
   <script>
   /* ════════════════════════════════════════════════════════════════════════════
      HYDRAULIC GIS — Application monofichier
-     Version: 2026-05-05-v11
+     Version: 2026-07-03-v12
      Stack : MapLibre GL 5 · terra-draw · proj4 · Turf · file-saver
 
      ARCHITECTURE NOTE: terra-draw is the SOLE renderer of drawn features.
@@ -1115,7 +1151,7 @@
     return { info: safe('info'), warn: safe('warn'), error: safe('error'), log: safe('log') };
   })();
 
-  log.info('%c[AtlasGIS] v11 — 2026-05-05', 'color:#3aa0ff;font-weight:bold;font-size:12px');
+  log.info('%c[AtlasGIS] v12 — 2026-07-03', 'color:#3aa0ff;font-weight:bold;font-size:12px');
 
   /* ─── iOS Safari pinch-zoom prevention ─────────────────────────────────
      Apple ignores `user-scalable=no` in viewport meta since iOS 10. A user
@@ -1939,6 +1975,29 @@
     return { featIds, label: parts.join(', ') || '0 objet' };
   }
 
+  function getSelectedFeaturesForStyle() {
+    const { featIds } = describeStyleTargets();
+    return state.features.filter(f => featIds.includes(f.id));
+  }
+
+  function summarizeStyles(features) {
+    if (!features.length) return {};
+    const pick = (key) => {
+      const vals = features.map(f => f.style[key]);
+      const first = vals[0];
+      return vals.every(v => v === first) ? first : undefined;
+    };
+    return {
+      stroke: pick('stroke'),
+      strokeWidth: pick('strokeWidth'),
+      fill: pick('fill'),
+      fillOpacity: pick('fillOpacity'),
+      showLabel: pick('showLabel'),
+    };
+  }
+
+  let refreshTerraDrawStylesHook = null;
+
   function toggleGroupSelection(gid) {
     const isSelected = state.selectedGroupIds.includes(gid);
     const featIds = getFeatureIdsInGroup(gid);
@@ -1948,6 +2007,11 @@
     } else {
       if (!state.selectedGroupIds.includes(gid)) state.selectedGroupIds.push(gid);
       featIds.forEach(id => { if (!state.selectedIds.includes(id)) state.selectedIds.push(id); });
+      const g = state.groups.find(x => x.id === gid);
+      if (g && g.collapsed) {
+        g.collapsed = false;
+        saveState();
+      }
     }
     notifyUi();
   }
@@ -1961,7 +2025,21 @@
   }
 
   function applyStyleToTargets(patch) {
-    getAllStyleTargetIds().forEach(id => setStyle(id, patch));
+    const ids = getAllStyleTargetIds();
+    if (!ids.length) return;
+    let touched = false;
+    ids.forEach(id => {
+      const f = state.features.find(x => x.id === id);
+      if (f) {
+        f.style = { ...f.style, ...patch };
+        f.updatedAt = Date.now();
+        touched = true;
+      }
+    });
+    if (!touched) return;
+    saveState();
+    try { if (typeof refreshTerraDrawStylesHook === 'function') refreshTerraDrawStylesHook(); } catch (_) {}
+    try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
   }
 
   function toggleSelect(id) {
@@ -1974,6 +2052,12 @@
       }
     } else {
       state.selectedIds = [...state.selectedIds, id];
+      if (f && f.groupId) {
+        const featIds = getFeatureIdsInGroup(f.groupId);
+        if (featIds.length && featIds.every(fid => state.selectedIds.includes(fid))) {
+          if (!state.selectedGroupIds.includes(f.groupId)) state.selectedGroupIds.push(f.groupId);
+        }
+      }
     }
     notifyUi();
   }
@@ -1984,6 +2068,7 @@
       return;
     }
     state.selectedIds = [id];
+    state.selectedGroupIds = [];
     notifyUi();
   }
   function terraIdMatch(a, b) {
@@ -2659,6 +2744,7 @@
       if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
       if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
       if (map.getLayer('app-label')) map.moveLayer('app-label');
+      raiseGridLayers();
     } catch (_) {}
 
     // Re-sync derived features (buffers, intersections, contours) so
@@ -3583,6 +3669,7 @@
           requestAnimationFrame(() => { try { map.triggerRepaint(); } catch (_) {} });
         } catch (_) {}
       }
+      refreshTerraDrawStylesHook = refreshTerraDrawStyles;
       // Hook the style refresh into our store. We do this by replacing
       // setStyle to also trigger a terra-draw repaint.
       const _origSetStyle = setStyle;
@@ -4447,8 +4534,10 @@
       const af = document.activeElement;
       const isLiveInput = af && /^(INPUT|SELECT|TEXTAREA)$/.test(af.tagName)
         && !af.matches('[type="checkbox"], [type="radio"]'); // checkboxes are fine to re-render
-      const skipPanelBody = panelEl && af && panelEl.contains(af) && isLiveInput;
-      const skipSheetBody = sheetEl && af && sheetEl.contains(af) && isLiveInput;
+      const skipPanelBody = state.activePanel !== 'layers'
+        && panelEl && af && panelEl.contains(af) && isLiveInput;
+      const skipSheetBody = state.activePanel !== 'layers'
+        && sheetEl && af && sheetEl.contains(af) && isLiveInput;
 
       // Render desktop panel
       if (this.isMobile()) {
@@ -4780,14 +4869,35 @@
     } catch (e) {}
   }
 
+  function mountDrawDefaultsInToolbar() {
+    const wrapper = document.getElementById('draw-dropdown-wrapper');
+    const dd = document.getElementById('draw-defaults');
+    const drawer = document.getElementById('draw-drawer');
+    if (wrapper && dd && dd.parentElement !== wrapper) {
+      if (drawer) wrapper.insertBefore(dd, drawer);
+      else wrapper.appendChild(dd);
+    }
+  }
+
   function initDrawDefaultsUi() {
     const wrap = document.getElementById('draw-defaults');
     const toggle = document.getElementById('dd-toggle');
     const groupSel = document.getElementById('dd-group');
+    const newGroupBtn = document.getElementById('dd-new-group');
     const stroke = document.getElementById('dd-stroke');
+    const strokeHex = document.getElementById('dd-stroke-hex');
+    const width = document.getElementById('dd-width');
+    const widthVal = document.getElementById('dd-width-val');
     const fill = document.getElementById('dd-fill');
+    const fillHex = document.getElementById('dd-fill-hex');
     const opacity = document.getElementById('dd-opacity');
+    const opacityVal = document.getElementById('dd-opacity-val');
+    const labelCb = document.getElementById('dd-label');
     if (!wrap || !toggle) return;
+
+    mountDrawDefaultsInToolbar();
+    setTimeout(mountDrawDefaultsInToolbar, 500);
+    setTimeout(mountDrawDefaultsInToolbar, 1500);
 
     const refreshGroupOpts = () => {
       if (!groupSel) return;
@@ -4800,10 +4910,19 @@
 
     const syncFromState = () => {
       refreshGroupOpts();
-      if (stroke) stroke.value = state.drawDefaults.style.stroke || '#3aa0ff';
-      if (fill) fill.value = state.drawDefaults.style.fill || '#3aa0ff';
-      if (opacity) opacity.value = String(state.drawDefaults.style.fillOpacity ?? 0.3);
+      const st = state.drawDefaults.style;
+      if (stroke) stroke.value = st.stroke || '#3aa0ff';
+      if (strokeHex) strokeHex.value = st.stroke || '#3aa0ff';
+      if (width) width.value = String(st.strokeWidth ?? 2.5);
+      if (widthVal) widthVal.textContent = (st.strokeWidth ?? 2.5).toFixed(1);
+      if (fill) fill.value = st.fill || '#3aa0ff';
+      if (fillHex) fillHex.value = st.fill || '#3aa0ff';
+      if (opacity) opacity.value = String(st.fillOpacity ?? 0.3);
+      if (opacityVal) opacityVal.textContent = Math.round((st.fillOpacity ?? 0.3) * 100) + '%';
+      if (labelCb) labelCb.checked = st.showLabel === false;
     };
+
+    const saveDrawDefaults = () => { saveState(); };
 
     toggle.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -4814,19 +4933,60 @@
 
     groupSel?.addEventListener('change', () => {
       state.drawDefaults.groupId = groupSel.value || null;
-      saveState();
+      saveDrawDefaults();
     });
+
+    newGroupBtn?.addEventListener('click', () => {
+      ui.prompt('Nouvelle couche', 'Nom de la couche :', 'Couche ' + (state.groups.length + 1), (name) => {
+        if (name && name.trim()) {
+          const g = createGroup(name.trim());
+          state.drawDefaults.groupId = g.id;
+          saveDrawDefaults();
+          refreshGroupOpts();
+          if (groupSel) groupSel.value = g.id;
+        }
+      });
+    });
+
     stroke?.addEventListener('input', () => {
       state.drawDefaults.style.stroke = stroke.value;
-      saveState();
+      if (strokeHex) strokeHex.value = stroke.value;
+      saveDrawDefaults();
+    });
+    strokeHex?.addEventListener('change', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(strokeHex.value)) {
+        state.drawDefaults.style.stroke = strokeHex.value;
+        if (stroke) stroke.value = strokeHex.value;
+        saveDrawDefaults();
+      }
+    });
+    width?.addEventListener('input', () => {
+      const v = parseFloat(width.value);
+      state.drawDefaults.style.strokeWidth = v;
+      if (widthVal) widthVal.textContent = v.toFixed(1);
+      saveDrawDefaults();
     });
     fill?.addEventListener('input', () => {
       state.drawDefaults.style.fill = fill.value;
-      saveState();
+      if (fillHex) fillHex.value = fill.value;
+      saveDrawDefaults();
+    });
+    fillHex?.addEventListener('change', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(fillHex.value)) {
+        state.drawDefaults.style.fill = fillHex.value;
+        if (fill) fill.value = fillHex.value;
+        saveDrawDefaults();
+      }
     });
     opacity?.addEventListener('input', () => {
-      state.drawDefaults.style.fillOpacity = parseFloat(opacity.value);
-      saveState();
+      const v = parseFloat(opacity.value);
+      state.drawDefaults.style.fillOpacity = v;
+      if (opacityVal) opacityVal.textContent = Math.round(v * 100) + '%';
+      saveDrawDefaults();
+    });
+    labelCb?.addEventListener('change', () => {
+      state.drawDefaults.style.showLabel = !labelCb.checked;
+      saveDrawDefaults();
     });
 
     document.addEventListener('click', (e) => {
@@ -4843,50 +5003,66 @@
   /* ═══ 9. PANEL CONTENT — STYLE ══════════════════════════════════════════════ */
   function renderStyle() {
     const targets = describeStyleTargets();
-    const sel = state.features.filter(f => targets.featIds.includes(f.id));
+    const sel = getSelectedFeaturesForStyle();
     if (sel.length === 0) {
       return `<div class="empty-state">Sélectionnez un ou plusieurs objets ou couches dans « Calques », ou sur la carte, pour modifier leur style.</div>`;
     }
-    const ref = sel[0].style;
+    const sum = summarizeStyles(sel);
+    const mixedNote = Object.values(sum).some(v => v === undefined)
+      ? `<div style="font-size:11px; color:var(--warn); margin-bottom:10px;">Valeurs mixtes — toute modification unifiera les ${sel.length} objets sélectionnés.</div>`
+      : '';
     const header = targets.label.includes('couche')
       ? `Modification de <strong style="color:var(--brand)">${escapeHtml(targets.label)}</strong> (${sel.length} objet${sel.length > 1 ? 's' : ''})`
       : sel.length === 1
         ? `Modification de <strong style="color:var(--brand)">${escapeHtml(sel[0].name)}</strong>`
         : `Modification de <strong style="color:var(--brand)">${sel.length} objets</strong> sélectionnés`;
+    const strokeVal = sum.stroke !== undefined ? sum.stroke : (sel[0].style.stroke || '#3aa0ff');
+    const strokeHexVal = sum.stroke !== undefined ? sum.stroke : '';
+    const strokeHexPh = sum.stroke === undefined ? '—' : '';
+    const widthVal = sum.strokeWidth !== undefined ? sum.strokeWidth : 2.5;
+    const widthDisp = sum.strokeWidth !== undefined ? sum.strokeWidth.toFixed(1) : '—';
+    const fillVal = sum.fill !== undefined ? sum.fill : (sel[0].style.fill || '#3aa0ff');
+    const fillHexVal = sum.fill !== undefined ? sum.fill : '';
+    const fillHexPh = sum.fill === undefined ? '—' : '';
+    const opacityVal = sum.fillOpacity !== undefined ? sum.fillOpacity : 0.3;
+    const opacityDisp = sum.fillOpacity !== undefined ? Math.round(sum.fillOpacity * 100) + '%' : '—';
+    const labelChecked = sum.showLabel === false ? 'checked' : '';
+    const labelIndet = sum.showLabel === undefined ? ' data-indeterminate="1"' : '';
     return `
       <div style="font-size:13px; color:var(--ink-1); margin-bottom:14px; padding:8px 10px; background:var(--bg-3); border-radius:6px;">${header}</div>
+      ${mixedNote}
       <div class="stack">
         <div>
           <label class="field-label">Contour</label>
           <div class="color-row">
-            <input type="color" id="st-stroke" value="${ref.stroke}" />
-            <input type="text" id="st-stroke-hex" class="field" value="${ref.stroke}" />
+            <input type="color" id="st-stroke" value="${strokeVal}" />
+            <input type="text" id="st-stroke-hex" class="field" value="${strokeHexVal}" placeholder="${strokeHexPh}" />
           </div>
         </div>
         <div>
           <label class="field-label">Épaisseur</label>
           <div class="slider-row">
-            <input type="range" id="st-width" min="0.5" max="10" step="0.5" value="${ref.strokeWidth}" />
-            <span class="val" id="st-width-val">${ref.strokeWidth.toFixed(1)}</span>
+            <input type="range" id="st-width" min="0.5" max="10" step="0.5" value="${widthVal}" />
+            <span class="val" id="st-width-val">${widthDisp}</span>
           </div>
         </div>
         <div>
           <label class="field-label">Remplissage</label>
           <div class="color-row">
-            <input type="color" id="st-fill" value="${ref.fill}" />
-            <input type="text" id="st-fill-hex" class="field" value="${ref.fill}" />
+            <input type="color" id="st-fill" value="${fillVal}" />
+            <input type="text" id="st-fill-hex" class="field" value="${fillHexVal}" placeholder="${fillHexPh}" />
           </div>
         </div>
         <div>
           <label class="field-label">Opacité</label>
           <div class="slider-row">
-            <input type="range" id="st-opacity" min="0" max="1" step="0.05" value="${ref.fillOpacity}" />
-            <span class="val" id="st-opacity-val">${Math.round(ref.fillOpacity * 100)}%</span>
+            <input type="range" id="st-opacity" min="0" max="1" step="0.05" value="${opacityVal}" />
+            <span class="val" id="st-opacity-val">${opacityDisp}</span>
           </div>
         </div>
         <div>
           <label class="checkbox-row">
-            <input type="checkbox" id="st-label" ${ref.showLabel === false ? 'checked' : ''} />
+            <input type="checkbox" id="st-label" ${labelChecked}${labelIndet} />
             <span>Masquer l'étiquette</span>
           </label>
         </div>
@@ -4898,6 +5074,10 @@
     const apply = (patch) => {
       applyStyleToTargets(patch);
     };
+    const labelCb = root.querySelector('#st-label');
+    if (labelCb && labelCb.dataset.indeterminate === '1') {
+      labelCb.indeterminate = true;
+    }
     root.querySelector('#st-stroke')?.addEventListener('input', e => {
       apply({ stroke: e.target.value });
       const hex = root.querySelector('#st-stroke-hex'); if (hex) hex.value = e.target.value;
@@ -4929,19 +5109,17 @@
       root.querySelector('#st-opacity-val').textContent = Math.round(v * 100) + '%';
     });
     root.querySelector('#st-label')?.addEventListener('change', e => {
-      // Checked = hide label, unchecked = show label.
+      if (labelCb) labelCb.indeterminate = false;
       apply({ showLabel: !e.target.checked });
-      try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
     });
     root.querySelector('#st-apply')?.addEventListener('click', () => {
-      try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
       try { map.triggerRepaint(); } catch (_) {}
     });
   }
 
   /* ═══ 10. PANEL CONTENT — MEASURE ═══════════════════════════════════════════ */
   function renderMeasure() {
-    const sel = state.features.filter(f => state.selectedIds.includes(f.id));
+    const sel = getSelectedFeaturesForStyle();
     if (sel.length === 0) {
       return `<div class="empty-state">Sélectionnez un objet dans le panneau « Calques » pour voir ses mesures.</div>`;
     }
@@ -6762,14 +6940,37 @@
     labelsCb.addEventListener('change', syncFromUI);
   }
 
+  function gridStackBeforeId() {
+    for (const id of ['app-derived-fill', 'app-contours-line', 'td-point', 'td-linestring', 'td-polygon', 'td-polygon-outline']) {
+      if (map.getLayer(id)) return id;
+    }
+    if (map.getLayer('app-selection-fill')) return 'app-selection-fill';
+    if (map.getLayer('app-label')) return 'app-label';
+    return undefined;
+  }
+
+  function raiseGridLayers() {
+    if (!map.isStyleLoaded()) return;
+    const beforeId = gridStackBeforeId();
+    try {
+      if (map.getLayer('app-grid-lines')) {
+        if (beforeId) map.moveLayer('app-grid-lines', beforeId);
+        else map.moveLayer('app-grid-lines');
+      }
+      if (map.getLayer('app-grid-text')) {
+        if (beforeId) map.moveLayer('app-grid-text', beforeId);
+        else map.moveLayer('app-grid-text');
+      }
+    } catch (_) {}
+  }
+
   function updateGrid() {
     if (!map.isStyleLoaded()) return;
     const SRC = 'app-grid', SRC_LBL = 'app-grid-labels';
     if (!map.getSource(SRC)) {
       map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource(SRC_LBL, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      // Insert grid lines BELOW everything else (after attribution but before app layers).
-      const beforeId = map.getLayer('app-poly-fill') ? 'app-poly-fill' : undefined;
+      const beforeId = gridStackBeforeId();
       map.addLayer({
         id: 'app-grid-lines', type: 'line', source: SRC,
         paint: {
@@ -6794,7 +6995,7 @@
           'text-halo-color': '#0b0f14',
           'text-halo-width': 1.4,
         },
-      });
+      }, beforeId);
     }
     const linesSrc = map.getSource(SRC);
     const lblSrc = map.getSource(SRC_LBL);
@@ -6803,9 +7004,14 @@
       lblSrc.setData({ type: 'FeatureCollection', features: [] });
       return;
     }
-    const { lines, labels } = buildGrid();
-    linesSrc.setData({ type: 'FeatureCollection', features: lines });
-    lblSrc.setData({ type: 'FeatureCollection', features: gridState.showLabels ? labels : [] });
+    try {
+      const { lines, labels } = buildGrid();
+      linesSrc.setData({ type: 'FeatureCollection', features: lines });
+      lblSrc.setData({ type: 'FeatureCollection', features: gridState.showLabels ? labels : [] });
+      raiseGridLayers();
+    } catch (err) {
+      log.warn('[HydraulicGIS] updateGrid failed:', err);
+    }
   }
 
   function buildGrid() {
