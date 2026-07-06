@@ -503,6 +503,8 @@
       padding: 10px;
       background: var(--bg-2);
       border: 1px solid var(--line); border-radius: 6px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
     }
     .layer-row.selected { border-color: var(--brand); background: rgba(58,160,255,0.05); }
     .layer-row.hidden { opacity: 0.5; }
@@ -572,10 +574,11 @@
     /* ─── Draw defaults (inside draw toolbar stack) ─── */
     #draw-defaults {
       position: static;
-      pointer-events: auto;
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
+      align-items: flex-start;
       gap: 4px;
+      pointer-events: none;
       max-width: min(280px, calc(100vw - 120px));
     }
     #draw-defaults .dd-toggle {
@@ -605,7 +608,13 @@
       #draw-defaults .dd-toggle { width: 44px; height: 44px; }
     }
     #draw-defaults .dd-panel {
+      pointer-events: auto;
       display: none;
+      position: absolute;
+      top: 42px;
+      left: 0;
+      min-width: 200px;
+      z-index: 20;
       background: var(--bg-2);
       border: 1px solid var(--line-strong);
       border-radius: 8px;
@@ -624,6 +633,28 @@
       width: 100%;
       font-size: 11px;
     }
+
+    #draw-toolbar-row {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 4px;
+      pointer-events: none;
+    }
+    #draw-defaults { position: relative; }
+
+    .label-drag-handle {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fbc412;
+      border: 2px solid #0b0f14;
+      box-shadow: 0 0 0 3px rgba(251,196,18,0.45), 0 2px 8px rgba(0,0,0,0.5);
+      cursor: grab;
+      touch-action: none;
+      pointer-events: auto;
+    }
+    .label-drag-handle:active { cursor: grabbing; transform: scale(1.08); }
 
     .empty-state {
       text-align: center;
@@ -910,7 +941,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-03·u (calques+style fixes)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-03·v (calques fix)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1220,6 +1251,7 @@
   var elevationCache = new Map();
   var elevationHoverMarker = null;
   var gridState = { enabled: false, crs: 'wgs84', spacing: 0, showLabels: true };
+  var labelHandleMarkers = new Map();
 
   // Drop a visible pin at the given lng/lat, replacing any previous fly-to
   // marker. Used by both the Coordinates "Aller à" button and tapping a
@@ -2039,7 +2071,9 @@
     if (!touched) return;
     saveState();
     try { if (typeof refreshTerraDrawStylesHook === 'function') refreshTerraDrawStylesHook(); } catch (_) {}
+    try { if (typeof syncDerivedLayer === 'function') syncDerivedLayer(); } catch (_) {}
     try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
+    try { map.triggerRepaint(); } catch (_) {}
   }
 
   function toggleSelect(id) {
@@ -2255,6 +2289,31 @@
 
   // Terra-draw control
   let drawControl = null;
+  let _originalSelectFlags = null;
+  function setSelectEditFlags(td, enabled) {
+    if (!td || !td._modes) return false;
+    const selectModeName = td._instanceSelectMode || 'select';
+    const selMode = td._modes[selectModeName];
+    if (!selMode || !selMode.flags) {
+      log.warn('[HydraulicGIS] select mode not found or has no flags');
+      return false;
+    }
+    if (!_originalSelectFlags) {
+      _originalSelectFlags = JSON.parse(JSON.stringify(selMode.flags));
+    }
+    if (enabled) {
+      selMode.flags = JSON.parse(JSON.stringify(_originalSelectFlags));
+    } else {
+      const noEditFlags = {};
+      for (const modeName of Object.keys(_originalSelectFlags)) {
+        noEditFlags[modeName] = {
+          feature: { draggable: false, rotateable: false, scaleable: false, coordinates: false },
+        };
+      }
+      selMode.flags = noEditFlags;
+    }
+    return true;
+  }
   let _geomanModule = null;
   let _geomanInstance = null;
 
@@ -2584,103 +2643,98 @@
     }
   }
 
+  function clearLabelHandleMarkers() {
+    labelHandleMarkers.forEach(m => { try { m.remove(); } catch (_) {} });
+    labelHandleMarkers.clear();
+  }
+
+  function restoreGeomEditAfterLabelDrag() {
+    if (!isEditModeActive()) return;
+    try {
+      const td2 = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+      if (!td2) return;
+      const firstId = state.selectedIds[0];
+      const ours = state.features.find(f => f.id === firstId);
+      if (ours && ours.geojson && ours.geojson.properties && ours.geojson.properties._terraId
+          && !isDerivedFeature(ours)) {
+        setSelectEditFlags(td2, true);
+        td2.setMode('select');
+        try { td2.selectFeature(ours.geojson.properties._terraId); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  function createLabelHandleMarker(id, anchor) {
+    const f = state.features.find(x => x.id === id);
+    if (!f) return null;
+    const el = document.createElement('div');
+    el.className = 'label-drag-handle';
+    el.title = 'Glisser pour déplacer le libellé';
+    const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
+      .setLngLat(anchor)
+      .addTo(map);
+    marker.on('dragstart', () => {
+      _labelDrag = { active: true, featureId: id, pointerId: null };
+      try {
+        const td2 = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+        if (td2) {
+          td2.setMode('static');
+          setSelectEditFlags(td2, false);
+        }
+      } catch (_) {}
+      try { map.dragPan.disable(); } catch (_) {}
+    });
+    marker.on('drag', () => {
+      const ll = marker.getLngLat();
+      f.labelAnchor = [ll.lng, ll.lat];
+      applyLabelFeatures(buildLabelFeatures());
+    });
+    marker.on('dragend', () => {
+      _labelDrag = { active: false, featureId: null, pointerId: null };
+      saveState();
+      try { map.dragPan.enable(); } catch (_) {}
+      restoreGeomEditAfterLabelDrag();
+    });
+    return marker;
+  }
+
   function syncLabelHandles() {
     if (!isEditModeActive()) {
+      clearLabelHandleMarkers();
       try {
         const s = map.getSource('app-label-handles');
         if (s) s.setData({ type: 'FeatureCollection', features: [] });
       } catch (_) {}
       return;
     }
-    ensureLabelHandleLayer();
-    const handles = [];
+    const needed = new Set();
     for (const id of state.selectedIds) {
       const f = state.features.find(x => x.id === id);
       if (!f || !isFeatureVisible(f) || (f.style && f.style.showLabel === false)) continue;
       const anchor = computeLabelAnchor(f, state.features);
       if (!anchor) continue;
-      handles.push({
-        type: 'Feature',
-        id: 'lh_' + id,
-        geometry: { type: 'Point', coordinates: anchor },
-        properties: { featureId: id },
-      });
+      needed.add(id);
+      let marker = labelHandleMarkers.get(id);
+      if (marker) {
+        if (!_labelDrag.active || _labelDrag.featureId !== id) {
+          marker.setLngLat(anchor);
+        }
+      } else {
+        marker = createLabelHandleMarker(id, anchor);
+        if (marker) labelHandleMarkers.set(id, marker);
+      }
     }
-    try {
-      map.getSource('app-label-handles').setData({ type: 'FeatureCollection', features: handles });
-      if (map.getLayer('app-label-handles-circle')) map.moveLayer('app-label-handles-circle');
-    } catch (_) {}
-  }
-
-  function hitTestLabelHandle(point) {
-    if (!isEditModeActive()) return null;
-    const LABEL_HIT_PX = 28;
-    for (const id of state.selectedIds) {
-      const f = state.features.find(x => x.id === id);
-      if (!f || (f.style && f.style.showLabel === false)) continue;
-      const anchor = computeLabelAnchor(f, state.features);
-      if (!anchor) continue;
-      try {
-        const p = map.project(anchor);
-        if (Math.hypot(p.x - point.x, p.y - point.y) <= LABEL_HIT_PX) return id;
-      } catch (_) {}
+    for (const [id, marker] of labelHandleMarkers) {
+      if (!needed.has(id)) {
+        try { marker.remove(); } catch (_) {}
+        labelHandleMarkers.delete(id);
+      }
     }
-    return null;
   }
 
   function installLabelDragHandlers() {
     if (_labelEditInstalled) return;
     _labelEditInstalled = true;
-    const canvas = map.getCanvas();
-
-    const onDown = (e) => {
-      if (!isEditModeActive()) return;
-      const pt = e.point || (e.touches && e.touches[0]
-        ? { x: e.touches[0].clientX - canvas.getBoundingClientRect().left,
-            y: e.touches[0].clientY - canvas.getBoundingClientRect().top }
-        : null);
-      if (!pt) return;
-      const fid = hitTestLabelHandle(pt);
-      if (!fid) return;
-      _labelDrag = { active: true, featureId: fid, pointerId: e.originalEvent && e.originalEvent.pointerId };
-      try { map.dragPan.disable(); } catch (_) {}
-      if (e.originalEvent) {
-        try { e.originalEvent.preventDefault(); e.originalEvent.stopPropagation(); } catch (_) {}
-      }
-    };
-
-    const onMove = (e) => {
-      if (!_labelDrag.active || !_labelDrag.featureId) return;
-      const f = state.features.find(x => x.id === _labelDrag.featureId);
-      if (!f) return;
-      const lngLat = e.lngLat || (e.touches && e.touches[0] && map.unproject([
-        e.touches[0].clientX - canvas.getBoundingClientRect().left,
-        e.touches[0].clientY - canvas.getBoundingClientRect().top,
-      ]));
-      if (!lngLat) return;
-      f.labelAnchor = [lngLat.lng, lngLat.lat];
-      f.updatedAt = Date.now();
-      applyLabelFeatures(buildLabelFeatures());
-      syncLabelHandles();
-      if (e.originalEvent) {
-        try { e.originalEvent.preventDefault(); } catch (_) {}
-      }
-    };
-
-    const onUp = () => {
-      if (!_labelDrag.active) return;
-      _labelDrag = { active: false, featureId: null, pointerId: null };
-      try { map.dragPan.enable(); } catch (_) {}
-      saveState();
-    };
-
-    map.on('mousedown', onDown);
-    map.on('touchstart', onDown);
-    map.on('mousemove', onMove);
-    map.on('touchmove', onMove);
-    map.on('mouseup', onUp);
-    map.on('touchend', onUp);
-    map.on('mouseleave', onUp);
   }
 
   function enableLabelEditMode() {
@@ -2691,7 +2745,7 @@
   function disableLabelEditMode() {
     _labelDrag = { active: false, featureId: null, pointerId: null };
     try { map.dragPan.enable(); } catch (_) {}
-    syncLabelHandles();
+    clearLabelHandleMarkers();
   }
 
   function syncFeaturesToMap() {
@@ -3190,56 +3244,6 @@
       }
       for (const d of [0, 50, 200, 500, 1000, 2000]) setTimeout(tryPatchFlags, d);
 
-      // ─── Select-mode flag patching ────────────────────────────────────
-      // We expose two states for the select-mode flags:
-      //   • SELECT-ONLY (enabled=false): tapping a feature in select mode
-      //     just marks it selected. NO vertices, NO drag, NO midpoints.
-      //   • EDIT (enabled=true): full editing — vertices visible and
-      //     draggable, midpoints insertable, feature draggable.
-      // The original (edit-enabled) flags are captured on first call so
-      // we can restore them later.
-      let _originalSelectFlags = null;
-      function setSelectEditFlags(td, enabled) {
-        if (!td || !td._modes) return false;
-        // Find the select mode instance. The wrapper stores it under
-        // _instanceSelectMode (mode name) and the modes themselves under
-        // _modes[name].
-        const selectModeName = td._instanceSelectMode || 'select';
-        const selMode = td._modes[selectModeName];
-        if (!selMode || !selMode.flags) {
-          log.warn('[HydraulicGIS] select mode not found or has no flags');
-          return false;
-        }
-        // Capture the original (edit-enabled) flags on first call.
-        if (!_originalSelectFlags) {
-          _originalSelectFlags = JSON.parse(JSON.stringify(selMode.flags));
-        }
-        if (enabled) {
-          // Restore original flags — full editing capability.
-          selMode.flags = JSON.parse(JSON.stringify(_originalSelectFlags));
-        } else {
-          // Replace flags with a "select-only" profile: no draggable,
-          // no midpoints, NO selection points (vertices). Terra-draw's
-          // select() function creates selectionPoints only if
-          // `flags[mode].feature.coordinates` is TRUTHY. So we set it
-          // to false (falsy) — that's how we disable vertex display.
-          const noEditFlags = {};
-          for (const modeName of Object.keys(_originalSelectFlags)) {
-            noEditFlags[modeName] = {
-              feature: {
-                draggable: false,
-                rotateable: false,
-                scaleable: false,
-                coordinates: false,   // <-- FALSY, so no vertices
-              },
-            };
-          }
-          selMode.flags = noEditFlags;
-        }
-        log.info('[HydraulicGIS] select-mode flags set, edit-enabled=' + enabled);
-        return true;
-      }
-
       // ─── Inject "multi-select" toggle button ─────────────────────────
       // Sits inside the terra-draw toolbar between the Select button and
       // the Delete-selection button. When toggled on, taps on the map add
@@ -3295,7 +3299,16 @@
             // Move terra-draw ctrl group from MapLibre's container into our drawer
             drawer.appendChild(tdCtrl);
 
-            wrapper.appendChild(toggle);
+            // Toolbar row: draw toggle + defaults gear (aligned side-by-side)
+            const row = document.createElement('div');
+            row.id = 'draw-toolbar-row';
+
+            row.appendChild(toggle);
+
+            const ddEl = document.getElementById('draw-defaults');
+            if (ddEl) row.appendChild(ddEl);
+
+            wrapper.appendChild(row);
             wrapper.appendChild(drawer);
 
             // Append to the #app div so it sits in the same stacking
@@ -4662,7 +4675,7 @@
       <div class="layer-row${sel ? ' selected' : ''}${f.style.visible ? '' : ' hidden'}" data-id="${f.id}">
         <span class="swatch" style="background:${f.style.fill}"></span>
         <div style="flex:1; min-width:0;">
-          <button class="layer-name" data-action="select" data-id="${f.id}" ondblclick="layerStartRename('${f.id}')" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}${derivedBadge}</button>
+          <div class="layer-name" ondblclick="event.stopPropagation(); layerStartRename('${f.id}')" title="Toucher pour sélectionner · double-clic pour renommer">${escapeHtml(f.name)}${derivedBadge}</div>
           ${metrics ? `<div class="layer-metrics">${metrics}</div>` : ''}
           ${groupSelect}
         </div>
@@ -4741,39 +4754,47 @@
   }
 
   function attachLayersEvents(root) {
-    function attachLongPress(el, onLong, onShort) {
-      let timer = null;
-      let longFired = false;
-      const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
-      const start = (e) => {
-        if (e.type === 'mousedown' && e.button !== 0) return;
-        longFired = false;
-        clear();
-        timer = setTimeout(() => { longFired = true; onLong(e); }, 550);
-      };
-      const end = () => {
-        clear();
-        if (!longFired && onShort) onShort();
-      };
-      el.addEventListener('mousedown', start);
-      el.addEventListener('mouseup', end);
-      el.addEventListener('mouseleave', clear);
-      el.addEventListener('touchstart', start, { passive: true });
-      el.addEventListener('touchend', end);
-      el.addEventListener('touchcancel', clear);
-      el.addEventListener('contextmenu', (e) => e.preventDefault());
-    }
-
+    // ── Layer (group) header: tap = select all, long-press = rename ──
     root.querySelectorAll('.group-name[data-gid]').forEach(btn => {
       const gid = btn.dataset.gid;
-      attachLongPress(btn, () => groupStartRename(gid), () => toggleGroupSelection(gid));
+      let pressTimer = null;
+      let longDone = false;
+      const clearPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 && e.pointerType === 'mouse') return;
+        longDone = false;
+        clearPress();
+        pressTimer = setTimeout(() => {
+          longDone = true;
+          clearPress();
+          groupStartRename(gid);
+        }, 550);
+      });
+      btn.addEventListener('pointerup', clearPress);
+      btn.addEventListener('pointercancel', clearPress);
+      btn.addEventListener('pointerleave', clearPress);
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (longDone) { longDone = false; e.preventDefault(); return; }
+        toggleGroupSelection(gid);
+      });
+    });
+
+    // ── Feature rows: tap row = toggle selection (additive multi-select) ──
+    root.querySelectorAll('.layer-row[data-id]').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.layer-action, .layer-group-select')) return;
+        e.stopPropagation();
+        const id = row.dataset.id;
+        if (id) toggleSelect(id);
+      });
     });
 
     root.querySelectorAll('[data-action]').forEach(btn => {
       btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         const action = btn.dataset.action;
         const gid = btn.dataset.gid;
-        // Group-level actions
         if (gid) {
           if (action === 'group-collapse') toggleGroupCollapsed(gid);
           else if (action === 'group-visibility') {
@@ -4787,10 +4808,8 @@
           }
           return;
         }
-        // Feature-level actions — Calques selection is always additive.
         const id = btn.dataset.id;
-        if (action === 'select') toggleSelect(id);
-        else if (action === 'zoom') zoomToFeature(id);
+        if (action === 'zoom') zoomToFeature(id);
         else if (action === 'visibility') toggleVisibility(id);
         else if (action === 'delete') {
           const f = state.features.find(x => x.id === id);
