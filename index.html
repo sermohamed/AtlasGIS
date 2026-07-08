@@ -941,7 +941,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-03·v (calques fix)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-08·w (draw+nav fix)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1575,6 +1575,8 @@
 
   function pushFeatureToTerraDraw(f) {
     if (!f || !f.geojson || !f.geojson.geometry || isDerivedFeature(f)) return false;
+    // Nav points render on app-derived-point (always visible, no terra-draw sync needed).
+    if (f.geojson.properties && f.geojson.properties._navPoint) return false;
     try {
       const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
       if (!td || typeof td.addFeatures !== 'function') return false;
@@ -1635,9 +1637,22 @@
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lng, lat] },
       properties: { _navPoint: true },
-    }, 'point', { name: nm });
-    pushFeatureToTerraDraw(f);
-    notifyFeaturesMapOnly();
+    }, 'point', {
+      name: nm,
+      applyDrawDefaults: false,
+      style: {
+        stroke: '#ff6b35',
+        fill: '#ff6b35',
+        strokeWidth: 3,
+        fillOpacity: 1,
+        visible: true,
+        showLabel: true,
+      },
+    });
+    selectFeature(f.id, { additive: false });
+    try { syncDerivedLayer(); } catch (_) {}
+    try { syncFeaturesToMap(); } catch (_) {}
+    try { map.triggerRepaint(); } catch (_) {}
     return f;
   }
 
@@ -2794,6 +2809,10 @@
       if (map.getLayer('app-derived-line')) map.moveLayer('app-derived-line');
       if (map.getLayer('app-derived-point')) map.moveLayer('app-derived-point');
       if (map.getLayer('app-contours-line')) map.moveLayer('app-contours-line');
+      if (map.getLayer('_hgis_draw_preview_fill')) map.moveLayer('_hgis_draw_preview_fill');
+      if (map.getLayer('_hgis_draw_preview_line')) map.moveLayer('_hgis_draw_preview_line');
+      if (map.getLayer('_hgis_draw_preview_point')) map.moveLayer('_hgis_draw_preview_point');
+      if (map.getLayer('_hgis_first_vertex_layer')) map.moveLayer('_hgis_first_vertex_layer');
       if (map.getLayer('app-selection-fill')) map.moveLayer('app-selection-fill');
       if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
       if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
@@ -3801,12 +3820,110 @@
         } catch (_) {}
       }
       function clearFirstVertex() { setFirstVertex(null); }
+
+      // ─── In-progress draw preview overlay ─────────────────────────────
+      // terra-draw's in-progress geometry/vertices can be invisible on mobile
+      // (degenerate lines, missing hover events). Mirror the live snapshot
+      // onto our own layers so the user always sees the trace while drawing.
+      const DRAW_PREVIEW_SRC = '_hgis_draw_preview';
+      const DRAW_PREVIEW_FL = '_hgis_draw_preview_fill';
+      const DRAW_PREVIEW_LN = '_hgis_draw_preview_line';
+      const DRAW_PREVIEW_PT = '_hgis_draw_preview_point';
+      function ensureDrawPreviewLayers() {
+        try {
+          if (!map.getSource(DRAW_PREVIEW_SRC)) {
+            map.addSource(DRAW_PREVIEW_SRC, {
+              type: 'geojson',
+              data: { type: 'FeatureCollection', features: [] },
+            });
+          }
+          if (!map.getLayer(DRAW_PREVIEW_FL)) {
+            map.addLayer({
+              id: DRAW_PREVIEW_FL, type: 'fill', source: DRAW_PREVIEW_SRC,
+              filter: ['==', ['geometry-type'], 'Polygon'],
+              paint: { 'fill-color': '#3f97e0', 'fill-opacity': 0.22 },
+            });
+          }
+          if (!map.getLayer(DRAW_PREVIEW_LN)) {
+            map.addLayer({
+              id: DRAW_PREVIEW_LN, type: 'line', source: DRAW_PREVIEW_SRC,
+              filter: ['in', ['geometry-type'], ['literal', ['LineString', 'Polygon']]],
+              paint: {
+                'line-color': '#3f97e0',
+                'line-width': 3.5,
+                'line-opacity': 0.95,
+              },
+            });
+          }
+          if (!map.getLayer(DRAW_PREVIEW_PT)) {
+            map.addLayer({
+              id: DRAW_PREVIEW_PT, type: 'circle', source: DRAW_PREVIEW_SRC,
+              filter: ['==', ['geometry-type'], 'Point'],
+              paint: {
+                'circle-radius': 8,
+                'circle-color': '#3f97e0',
+                'circle-stroke-color': '#ffffff',
+                'circle-stroke-width': 2,
+              },
+            });
+          }
+          raiseDrawPreviewLayers();
+        } catch (_) {}
+      }
+      function raiseDrawPreviewLayers() {
+        try {
+          for (const id of [DRAW_PREVIEW_FL, DRAW_PREVIEW_LN, DRAW_PREVIEW_PT, FIRST_VTX_LYR]) {
+            if (map.getLayer(id)) map.moveLayer(id);
+          }
+          if (map.getLayer('app-label')) map.moveLayer('app-label');
+        } catch (_) {}
+      }
+      function clearDrawPreview() {
+        try {
+          const src = map.getSource(DRAW_PREVIEW_SRC);
+          if (src) src.setData({ type: 'FeatureCollection', features: [] });
+        } catch (_) {}
+      }
+      function syncDrawPreview() {
+        try {
+          const td2 = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+          if (!td2) { clearDrawPreview(); return; }
+          const mode = td2.getMode && td2.getMode();
+          const drawModes = ['point', 'linestring', 'polygon', 'rectangle', 'circle'];
+          if (!drawModes.includes(mode)) { clearDrawPreview(); return; }
+          const storeIds = new Set(
+            state.features
+              .map(f => f.geojson && f.geojson.properties && f.geojson.properties._terraId)
+              .filter(Boolean)
+              .map(String)
+          );
+          const snap = td2.getSnapshot ? td2.getSnapshot() : [];
+          const preview = [];
+          for (const f of snap) {
+            if (!f || !f.geometry) continue;
+            if (storeIds.has(String(f.id))) continue;
+            preview.push({
+              type: 'Feature',
+              geometry: f.geometry,
+              properties: {},
+            });
+          }
+          ensureDrawPreviewLayers();
+          map.getSource(DRAW_PREVIEW_SRC).setData({
+            type: 'FeatureCollection',
+            features: preview,
+          });
+          raiseDrawPreviewLayers();
+        } catch (_) { clearDrawPreview(); }
+      }
+
       // Re-add layer after basemap style swaps (style swap drops custom layers).
       map.on('styledata', () => {
         // If the layer was lost in the swap and we had a vertex showing,
         // re-create it (data is already in our source if we cached it,
         // but simpler: just ensure the layer exists for next use).
         ensureFirstVertexLayer();
+        ensureDrawPreviewLayers();
       });
 
       // Boost vertex point size. Layers are 'td-point', 'td-linestring',
@@ -3949,6 +4066,10 @@
         } catch (_) {}
       }, true);  // capture phase — runs BEFORE terra-draw's own listener
 
+      map.on('mousemove', () => {
+        try { syncDrawPreview(); } catch (_) {}
+      });
+
       const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
       if (td && typeof td.on === 'function') {
 
@@ -3956,6 +4077,7 @@
           // Re-apply vertex size boost on every change — td-point may have
           // just been created by terra-draw's lazy layer-add.
           boostTerraDrawPointSize();
+          syncDrawPreview();
 
           // ── Mobile first-vertex overlay logic ──
           // Inspect terra-draw's snapshot. If a degenerate (zero-size)
@@ -4143,6 +4265,7 @@
 
         // Fallback handlers (kept intentionally redundant for cross-device robustness).
         td.on('finish', (id, ctx) => {
+          clearDrawPreview();
           try {
             const snap = td.getSnapshot ? td.getSnapshot() : [];
             const tf = findTdSnapshotFeatureFallback(snap, id);
@@ -6052,7 +6175,7 @@
           filter: ['==', ['geometry-type'], 'Point'],
           paint: {
             'circle-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
-            'circle-radius': 6,
+            'circle-radius': ['case', ['boolean', ['get', 'isNav'], false], 10, 6],
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,
           },
@@ -6083,7 +6206,8 @@
     try {
       ensureDerivedLayers();
       const visibleDerived = state.features
-        .filter(f => f.geojson && f.geojson.properties && f.geojson.properties._derived)
+        .filter(f => f.geojson && f.geojson.properties
+          && (f.geojson.properties._derived || f.geojson.properties._navPoint))
         .filter(f => isFeatureVisible(f));
 
       const contourFeatures = visibleDerived.filter(f => f.geojson.properties._derivedKind === 'contours');
@@ -6115,6 +6239,7 @@
               strokeWidth: f.style.strokeWidth,
               fill: f.style.fill,
               fillOpacity: f.style.fillOpacity,
+              isNav: !!(f.geojson.properties && f.geojson.properties._navPoint),
             },
           })),
         });
