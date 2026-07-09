@@ -941,7 +941,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-09·x (satellite zoom)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-09·y (points+coords)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -962,9 +962,9 @@
           <svg viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="11" r="1.5" fill="currentColor"/><circle cx="9" cy="6.5" r="1.5" fill="currentColor"/><circle cx="14.5" cy="14.5" r="1.5" fill="currentColor"/></svg>
           <span class="lbl">Style</span>
         </button>
-        <button class="rail-btn" data-panel="measure" title="Mesures">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M16 4l4 4L8 20l-4-4L16 4z M14 6l2 2 M11 9l2 2 M8 12l2 2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-          <span class="lbl">Mesure</span>
+        <button class="rail-btn" data-panel="measure" title="Propriétés">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h10M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="lbl">Propriétés</span>
         </button>
         <button class="rail-btn" data-panel="coordinates" title="Convertir coordonnées">
           <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="10" r="3" stroke="currentColor" stroke-width="2"/><path d="M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z" stroke="currentColor" stroke-width="2"/></svg>
@@ -1299,6 +1299,54 @@
   ];
   const CRS_BY_ID = Object.fromEntries(CRS_LIST.map(c => [c.id, c]));
 
+  function copyTextToClipboard(text) {
+    const s = String(text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(s).then(() => true).catch(() => false);
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return Promise.resolve(ok);
+    } catch (_) {
+      return Promise.resolve(false);
+    }
+  }
+
+  function googleMapsUrl(lat, lng) {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  }
+
+  function coordsToWgs84(xy, crsId) {
+    if (crsId === 'wgs84') return xy.slice();
+    return reproject(xy, crsId, 'wgs84');
+  }
+
+  function getFeaturePointCoords(f) {
+    const g = f && f.geojson && f.geojson.geometry;
+    if (!g || g.type !== 'Point' || !g.coordinates || g.coordinates.length < 2) return null;
+    return { lng: g.coordinates[0], lat: g.coordinates[1] };
+  }
+
+  function formatCoordPairWgs(lng, lat, decimals = 8) {
+    return `${lng.toFixed(decimals)}, ${lat.toFixed(decimals)}`;
+  }
+
+  function detachPointFromTerraDraw(f) {
+    if (!f || f.kind !== 'point') return;
+    const tid = f.geojson && f.geojson.properties && f.geojson.properties._terraId;
+    if (!tid || !drawControl) return;
+    try {
+      const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+      if (td && typeof td.removeFeatures === 'function') td.removeFeatures([tid]);
+    } catch (_) {}
+  }
+
   function reproject([x, y], from, to) {
     if (from === to) return [x, y];
     const r = proj4(from, to, [x, y]);
@@ -1575,6 +1623,8 @@
 
   function pushFeatureToTerraDraw(f) {
     if (!f || !f.geojson || !f.geojson.geometry || isDerivedFeature(f)) return false;
+    // Points render on app-derived-point (terra-draw td-point is unreliable on mobile).
+    if (f.kind === 'point') return false;
     // Nav points render on app-derived-point (always visible, no terra-draw sync needed).
     if (f.geojson.properties && f.geojson.properties._navPoint) return false;
     try {
@@ -1602,6 +1652,9 @@
 
   function restoreFeaturesToTerraDraw() {
     let count = 0;
+    for (const f of state.features) {
+      if (f.kind === 'point') detachPointFromTerraDraw(f);
+    }
     for (const f of state.features) {
       if (isDerivedFeature(f) || !isFeatureVisible(f)) continue;
       if (pushFeatureToTerraDraw(f)) count++;
@@ -4161,6 +4214,10 @@
             properties: { _terraId: terraId },
           }, kind);
           selectFeature(newF.id, { additive: false });
+          if (kind === 'point') {
+            detachPointFromTerraDraw(newF);
+            try { syncDerivedLayer(); } catch (_) {}
+          }
           const tidKey = (terraId == null) ? String(newF.id) : String(terraId);
           if (!_promptedTerraIdsFallback.has(tidKey)) {
             _promptedTerraIdsFallback.add(tidKey);
@@ -4271,6 +4328,10 @@
               existing.geojson.geometry = tf.geometry;
               existing.metrics = computeMetrics(existing.geojson, existing.kind);
               existing.updatedAt = Date.now();
+              if (existing.kind === 'point') {
+                detachPointFromTerraDraw(existing);
+                try { syncDerivedLayer(); } catch (_) {}
+              }
               notifyFeatures();
               // If a feature was created from a change event path before finish,
               // still ensure the naming prompt appears once at completion.
@@ -4706,7 +4767,7 @@
   const PANEL_TITLES = {
     layers: 'Calques',
     style: 'Style',
-    measure: 'Mesures',
+    measure: 'Propriétés',
     tools: 'Outils géométriques',
     legend: 'Légende',
     coordinates: 'Convertir coordonnées',
@@ -4723,7 +4784,7 @@
     if (panelId === 'menu') el.innerHTML = renderMenu();
     else if (panelId === 'layers') el.innerHTML = renderLayers();
     else if (panelId === 'style') el.innerHTML = renderStyle();
-    else if (panelId === 'measure') el.innerHTML = renderMeasure();
+    else if (panelId === 'measure') { el.innerHTML = renderMeasure(); attachMeasureEvents(el); }
     else if (panelId === 'tools') el.innerHTML = renderTools();
     else if (panelId === 'legend') el.innerHTML = renderLegend();
     else if (panelId === 'coordinates') el.innerHTML = renderCoordinates();
@@ -4748,7 +4809,7 @@
     const items = [
       { id: 'layers', label: 'Calques', icon: 'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 17l9 5 9-5' },
       { id: 'style', label: 'Style', icon: 'M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z' },
-      { id: 'measure', label: 'Mesures', icon: 'M16 4l4 4L8 20l-4-4L16 4z' },
+      { id: 'measure', label: 'Propriétés', icon: 'M4 6h16M4 12h10M4 18h16' },
       { id: 'tools', label: 'Outils géométriques', icon: 'M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z' },
       { id: 'legend', label: 'Légende', icon: 'M4 6h16M4 12h10M4 18h16' },
       { id: 'coordinates', label: 'Convertir coordonnées', icon: 'M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z' },
@@ -5256,23 +5317,52 @@
     });
   }
 
-  /* ═══ 10. PANEL CONTENT — MEASURE ═══════════════════════════════════════════ */
+  /* ═══ 10. PANEL CONTENT — PROPERTIES (ex-Mesure) ═══════════════════════════ */
+  function renderPointPropertiesHtml(f) {
+    const pt = getFeaturePointCoords(f);
+    if (!pt) return '';
+    const wgsLine = formatCoordPairWgs(pt.lng, pt.lat, 8);
+    const wgsDisp = `${pt.lng.toFixed(6)}°, ${pt.lat.toFixed(6)}°`;
+    let lambertLine = '', lambertDisp = '';
+    try {
+      const [x, y] = reproject([pt.lng, pt.lat], 'wgs84', 'lambert-maroc-1');
+      lambertLine = `${x.toFixed(3)}, ${y.toFixed(3)}`;
+      lambertDisp = `${formatProjected(x, 3)} ; ${formatProjected(y, 3)}`;
+    } catch (_) {}
+    const gmaps = googleMapsUrl(pt.lat, pt.lng);
+    return `
+      <div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--line);">
+        <div class="field-label">Coordonnées WGS84</div>
+        <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); margin-bottom:6px;">${wgsDisp}</div>
+        <div class="field-label">Lambert Zone 1 (X ; Y)</div>
+        <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); margin-bottom:8px;">${lambertDisp || '—'}</div>
+        <div class="row" style="gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-ghost btn-copy-coords" data-copy="${escapeHtml(wgsLine)}" style="flex:1; min-width:120px;">Copier WGS84</button>
+          ${lambertLine ? `<button type="button" class="btn btn-ghost btn-copy-coords" data-copy="${escapeHtml(lambertLine)}" style="flex:1; min-width:120px;">Copier Lambert</button>` : ''}
+          <a class="btn btn-subtle" href="${gmaps}" target="_blank" rel="noopener noreferrer" style="flex:1; min-width:120px; text-decoration:none; justify-content:center;">Google Maps</a>
+        </div>
+      </div>`;
+  }
+
   function renderMeasure() {
     const sel = getSelectedFeaturesForStyle();
     if (sel.length === 0) {
-      return `<div class="empty-state">Sélectionnez un objet dans le panneau « Calques » pour voir ses mesures.</div>`;
+      return `<div class="empty-state">Sélectionnez un objet dans « Calques » pour voir ses propriétés.</div>`;
     }
     let totalLen = 0, totalArea = 0;
     const items = sel.map(f => {
       if (f.metrics.lengthMeters) totalLen += f.metrics.lengthMeters;
       if (f.metrics.areaSquareMeters) totalArea += f.metrics.areaSquareMeters;
+      const coordsBlock = f.kind === 'point' ? renderPointPropertiesHtml(f) : '';
       return `
         <div class="surface" style="margin-bottom:8px;">
           <div style="font-weight:500; margin-bottom:6px;">${escapeHtml(f.name)}</div>
           <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1);">
             ${f.metrics.lengthMeters !== undefined ? `<div><span style="color:var(--ink-2)">Longueur :</span> ${formatDistance(f.metrics.lengthMeters)}</div>` : ''}
             ${f.metrics.areaSquareMeters !== undefined ? `<div><span style="color:var(--ink-2)">Surface  :</span> ${formatArea(f.metrics.areaSquareMeters)}</div>` : ''}
+            ${f.kind === 'point' && !f.metrics.lengthMeters && !f.metrics.areaSquareMeters ? `<div><span style="color:var(--ink-2)">Type :</span> Point</div>` : ''}
           </div>
+          ${coordsBlock}
         </div>`;
     }).join('');
     let total = '';
@@ -5287,6 +5377,20 @@
         </div>`;
     }
     return items + total;
+  }
+
+  function attachMeasureEvents(root) {
+    root.querySelectorAll('.btn-copy-coords').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const text = btn.dataset.copy;
+        if (!text) return;
+        copyTextToClipboard(text).then((ok) => {
+          const prev = btn.textContent;
+          btn.textContent = ok ? 'Copié ✓' : 'Échec copie';
+          setTimeout(() => { btn.textContent = prev; }, 1400);
+        });
+      });
+    });
   }
 
   /* ═══ 10b. PANEL CONTENT — TOOLS (buffer, intersection) ═════════════════════ */
@@ -6172,7 +6276,10 @@
           filter: ['==', ['geometry-type'], 'Point'],
           paint: {
             'circle-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
-            'circle-radius': ['case', ['boolean', ['get', 'isNav'], false], 10, 6],
+            'circle-radius': ['case',
+              ['boolean', ['get', 'isNav'], false], 10,
+              ['max', 7, ['*', ['coalesce', ['get', 'strokeWidth'], 2.5], 3]],
+            ],
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,
           },
@@ -6204,7 +6311,7 @@
       ensureDerivedLayers();
       const visibleDerived = state.features
         .filter(f => f.geojson && f.geojson.properties
-          && (f.geojson.properties._derived || f.geojson.properties._navPoint))
+          && (f.geojson.properties._derived || f.geojson.properties._navPoint || f.kind === 'point'))
         .filter(f => isFeatureVisible(f));
 
       const contourFeatures = visibleDerived.filter(f => f.geojson.properties._derivedKind === 'contours');
@@ -6331,6 +6438,7 @@
         </div>
 
         <div id="cc-error" style="color:var(--danger); font-size:12px;"></div>
+        <div id="cc-result" class="surface" style="display:none;"></div>
 
         ${(coordHistory && coordHistory.length > 0) ? `
           <div>
@@ -6480,8 +6588,8 @@
         // Re-query the input elements because if the panel was reopened,
         // the previous DOM nodes were destroyed by the panel re-render.
         // We update via a safe lookup on the visible sheet content.
-        const xUpdated = c.isGeographic ? x.toFixed(6) : x.toFixed(2);
-        const yUpdated = c.isGeographic ? y.toFixed(6) : y.toFixed(2);
+        const xUpdated = c.isGeographic ? x.toFixed(8) : x.toFixed(3);
+        const yUpdated = c.isGeographic ? y.toFixed(8) : y.toFixed(3);
         // Stash on the global so the panel re-init can pick them up.
         ui._pendingPickResult = { x: xUpdated, y: yUpdated, fromCrs: fromSel.value };
         pickModeOff = null;
@@ -6507,6 +6615,47 @@
       updateLabels();
     });
 
+    function showConvertResult(out, fromId, toId) {
+      const resultEl = root.querySelector('#cc-result');
+      if (!resultEl) return;
+      const outCrs = CRS_BY_ID[toId];
+      const [lng, lat] = coordsToWgs84(out, toId);
+      const outX = outCrs.isGeographic ? out[0].toFixed(8) : out[0].toFixed(3);
+      const outY = outCrs.isGeographic ? out[1].toFixed(8) : out[1].toFixed(3);
+      const outDispX = outCrs.isGeographic ? `${out[0].toFixed(6)}°` : formatProjected(out[0], 3);
+      const outDispY = outCrs.isGeographic ? `${out[1].toFixed(6)}°` : formatProjected(out[1], 3);
+      const copyLine = outCrs.isGeographic
+        ? formatCoordPairWgs(out[0], out[1], 8)
+        : `${out[0].toFixed(3)}, ${out[1].toFixed(3)}`;
+      const wgsCopy = formatCoordPairWgs(lng, lat, 8);
+      const gmaps = googleMapsUrl(lat, lng);
+      resultEl.style.display = 'block';
+      resultEl.innerHTML = `
+        <div class="field-label" style="margin-bottom:6px;">Résultat — ${escapeHtml(outCrs.label)}</div>
+        <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); margin-bottom:4px;">
+          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.axes[0])} :</span> ${outDispX}</div>
+          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.axes[1])} :</span> ${outDispY}</div>
+          <div style="margin-top:6px; font-size:11px; color:var(--ink-2);">WGS84 : ${lng.toFixed(6)}°, ${lat.toFixed(6)}°</div>
+        </div>
+        <div class="row" style="gap:6px; flex-wrap:wrap; margin-top:8px;">
+          <button type="button" class="btn btn-ghost" id="cc-copy-result" style="flex:1; min-width:120px;">Copier résultat</button>
+          <button type="button" class="btn btn-ghost" id="cc-copy-wgs" style="flex:1; min-width:120px;">Copier WGS84</button>
+          <a class="btn btn-subtle" id="cc-gmaps" href="${gmaps}" target="_blank" rel="noopener noreferrer" style="flex:1; min-width:120px; text-decoration:none; justify-content:center;">Ouvrir dans Google Maps</a>
+        </div>`;
+      root.querySelector('#cc-copy-result')?.addEventListener('click', () => {
+        copyTextToClipboard(copyLine).then((ok) => {
+          const b = root.querySelector('#cc-copy-result');
+          if (b) { const p = b.textContent; b.textContent = ok ? 'Copié ✓' : 'Échec'; setTimeout(() => { b.textContent = p; }, 1400); }
+        });
+      });
+      root.querySelector('#cc-copy-wgs')?.addEventListener('click', () => {
+        copyTextToClipboard(wgsCopy).then((ok) => {
+          const b = root.querySelector('#cc-copy-wgs');
+          if (b) { const p = b.textContent; b.textContent = ok ? 'Copié ✓' : 'Échec'; setTimeout(() => { b.textContent = p; }, 1400); }
+        });
+      });
+    }
+
     root.querySelector('#cc-convert').addEventListener('click', () => {
       errEl.textContent = '';
       const inp = parseInputs();
@@ -6514,6 +6663,7 @@
       const out = reproject(inp, fromSel.value, toSel.value);
       coordHistory.unshift({ from: fromSel.value, to: toSel.value, in: inp, out, ts: Date.now() });
       coordHistory = coordHistory.slice(0, 20);
+      showConvertResult(out, fromSel.value, toSel.value);
       // CRITICAL: do NOT call ui.render() here — it re-renders the whole
       // panel, which DESTROYS the cc-x and cc-y input DOM nodes and
       // RECREATES them empty. That was the cause of "Aller à" failing
