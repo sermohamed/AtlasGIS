@@ -941,7 +941,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-08·w (draw+nav fix)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-09·x (satellite zoom)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -2137,12 +2137,11 @@
           type: 'raster',
           tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256,
-          // Tell MapLibre the actual max zoom level the server has tiles for.
-          // Without this, MapLibre requests z20+ tiles, gets 404s, and shows
-          // grey "map data not yet available" tiles. With it, MapLibre stops
-          // requesting at z19 and overzooms (stretches z19 pixels) for z20+.
-          // ESRI World Imagery maxes out at z19 in most regions worldwide.
-          maxzoom: 19,
+          // ESRI serves z19 tiles globally but many regions (incl. rural Morocco)
+          // return grey "Map data not yet available" placeholders at z19 even
+          // though the HTTP request succeeds. Cap native tiles at z18 so MapLibre
+          // overzooms (upscales z18 imagery) instead of fetching empty z19 tiles.
+          maxzoom: 18,
           attribution: 'Tiles © Esri — World Imagery',
         },
         // Transparent overlay with city names, road labels, etc.
@@ -2152,7 +2151,7 @@
           type: 'raster',
           tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256,
-          maxzoom: 19,
+          maxzoom: 18,
           attribution: 'Labels © Esri',
         },
         // Transportation overlay for roads and routes.
@@ -2160,16 +2159,14 @@
           type: 'raster',
           tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256,
-          maxzoom: 19,
+          maxzoom: 18,
           attribution: 'Roads © Esri',
         },
       },
       layers: [
-        // maxzoom on the LAYER lets MapLibre overzoom (re-stretch lower-z
-        // tiles when the user zooms past the source's true max). Without
-        // this, zooming past ~19 shows blank tiles instead of pixelated
-        // imagery. minzoom 0 lets the world view work.
-        { id: 'esri-imagery', type: 'raster', source: 'esri', minzoom: 0, maxzoom: 22 },
+        // Layer maxzoom > source maxzoom enables overzoom (upscaled tiles past z18).
+        { id: 'esri-imagery', type: 'raster', source: 'esri', minzoom: 0, maxzoom: 22,
+          layout: { 'raster-resampling': 'linear' } },
         { id: 'esri-roads', type: 'raster', source: 'esri-transportation', minzoom: 0, maxzoom: 22 },
         { id: 'esri-labels', type: 'raster', source: 'esri-labels', minzoom: 0, maxzoom: 22 },
       ],
@@ -2181,18 +2178,17 @@
   // Load persisted state before map creation so the saved basemap takes effect.
   loadState();
 
+  const SATELLITE_MAX_ZOOM = 20; // allow pinch-zoom past native z18 via overzoom
+
   const map = new maplibregl.Map({
     container: 'map',
     style: BASEMAPS[state.basemap],
     center: [-5.0, 33.5],
     zoom: 5,
-    // Bound zoom to what every basemap actually serves. ESRI World Imagery
-    // tops out around z19 (above that we'd see "map data not yet available"
-    // grey tiles); Carto dark-matter/positron go to z19. Below z2 the world
-    // wraps poorly on a 2D Mercator and Carto sources sometimes return blank
-    // tiles. These bounds keep every basemap visually consistent.
+    // Satellite: native imagery capped at z18 (see BASEMAPS); map can zoom to 20
+    // with upscaled tiles. Carto basemaps top out around z19.
     minZoom: 2,
-    maxZoom: 19,
+    maxZoom: state.basemap === 'satellite' ? SATELLITE_MAX_ZOOM : 19,
     attributionControl: { compact: true },
 
     // ─── Gesture configuration to avoid conflicts with terra-draw ───
@@ -4515,6 +4511,7 @@
 
     map.setStyle(BASEMAPS[id]);
     map.once('idle', () => {
+      map.setMaxZoom(id === 'satellite' ? SATELLITE_MAX_ZOOM : 19);
       installAppLayers();
       restorePersistedMapState();
       updateGrid();
