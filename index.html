@@ -967,7 +967,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-09·aa (basemaps)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-09·ab (basemap fix)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1525,17 +1525,6 @@
             state.drawDefaults.style = { ...state.drawDefaults.style, ...parsed.style };
           }
         }
-      }
-    } catch (e) {}
-    // Restore basemap preference (migrate legacy "satellite" → hybrid once)
-    try {
-      const bm = localStorage.getItem('hydraulic-gis:basemap');
-      if (bm === 'satellite' && !localStorage.getItem('hydraulic-gis:basemap-v2')) {
-        state.basemap = 'hybrid';
-        localStorage.setItem('hydraulic-gis:basemap', 'hybrid');
-        localStorage.setItem('hydraulic-gis:basemap-v2', '1');
-      } else if (bm && BASEMAPS[bm]) {
-        state.basemap = bm;
       }
     } catch (e) {}
   }
@@ -2251,20 +2240,37 @@
   }
 
   /* ═══ 5. MAP & DRAWING ══════════════════════════════════════════════════════ */
-  const ESRI_RASTER = (servicePath, attribution) => ({
+  const ESRI_IMAGERY_SOURCE = {
     type: 'raster',
-    tiles: [`https://server.arcgisonline.com/ArcGIS/rest/services/${servicePath}/MapServer/tile/{z}/{y}/{x}`],
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
     tileSize: 256,
     // ESRI serves z19 tiles globally but many regions (incl. rural Morocco)
     // return grey "Map data not yet available" placeholders at z19. Cap native
     // tiles at z18 so MapLibre overzooms instead of fetching empty z19 tiles.
     maxzoom: 18,
-    attribution,
-  });
-  const ESRI_RASTER_LAYER = (id, source, resampling) => ({
-    id, type: 'raster', source, minzoom: 0, maxzoom: 22,
-    ...(resampling ? { layout: { 'raster-resampling': resampling } } : {}),
-  });
+    attribution: 'Tiles © Esri — World Imagery',
+  };
+  const ESRI_LABELS_SOURCE = {
+    type: 'raster',
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256,
+    maxzoom: 18,
+    attribution: 'Labels © Esri',
+  };
+  const ESRI_ROADS_SOURCE = {
+    type: 'raster',
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256,
+    maxzoom: 18,
+    attribution: 'Roads © Esri',
+  };
+  const ESRI_TOPO_SOURCE = {
+    type: 'raster',
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256,
+    maxzoom: 18,
+    attribution: 'Tiles © Esri — World Topo Map',
+  };
   const RASTER_GLYPHS = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf';
 
   const BASEMAPS = {
@@ -2273,35 +2279,34 @@
     satellite: {
       version: 8,
       glyphs: RASTER_GLYPHS,
-      sources: {
-        esri: ESRI_RASTER('World_Imagery', 'Tiles © Esri — World Imagery'),
-      },
+      sources: { esri: ESRI_IMAGERY_SOURCE },
       layers: [
-        ESRI_RASTER_LAYER('esri-imagery', 'esri', 'linear'),
+        { id: 'esri-imagery', type: 'raster', source: 'esri', minzoom: 0, maxzoom: 22,
+          layout: { 'raster-resampling': 'linear' } },
       ],
     },
     hybrid: {
       version: 8,
       glyphs: RASTER_GLYPHS,
       sources: {
-        esri: ESRI_RASTER('World_Imagery', 'Tiles © Esri — World Imagery'),
-        'esri-labels': ESRI_RASTER('Reference/World_Boundaries_and_Places', 'Labels © Esri'),
-        'esri-transportation': ESRI_RASTER('Reference/World_Transportation', 'Roads © Esri'),
+        esri: ESRI_IMAGERY_SOURCE,
+        'esri-labels': ESRI_LABELS_SOURCE,
+        'esri-transportation': ESRI_ROADS_SOURCE,
       },
       layers: [
-        ESRI_RASTER_LAYER('esri-imagery', 'esri', 'linear'),
-        ESRI_RASTER_LAYER('esri-roads', 'esri-transportation'),
-        ESRI_RASTER_LAYER('esri-labels', 'esri-labels'),
+        { id: 'esri-imagery', type: 'raster', source: 'esri', minzoom: 0, maxzoom: 22,
+          layout: { 'raster-resampling': 'linear' } },
+        { id: 'esri-roads', type: 'raster', source: 'esri-transportation', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-labels', type: 'raster', source: 'esri-labels', minzoom: 0, maxzoom: 22 },
       ],
     },
     terrain: {
       version: 8,
       glyphs: RASTER_GLYPHS,
-      sources: {
-        'esri-topo': ESRI_RASTER('World_Topo_Map', 'Tiles © Esri — World Topo Map'),
-      },
+      sources: { 'esri-topo': ESRI_TOPO_SOURCE },
       layers: [
-        ESRI_RASTER_LAYER('esri-topo', 'esri-topo', 'linear'),
+        { id: 'esri-topo', type: 'raster', source: 'esri-topo', minzoom: 0, maxzoom: 22,
+          layout: { 'raster-resampling': 'linear' } },
       ],
     },
   };
@@ -2310,22 +2315,39 @@
     return id === 'satellite' || id === 'hybrid' || id === 'terrain';
   }
 
+  function restoreBasemapPreference() {
+    try {
+      const bm = localStorage.getItem('hydraulic-gis:basemap');
+      if (bm === 'satellite' && !localStorage.getItem('hydraulic-gis:basemap-v2')) {
+        state.basemap = 'hybrid';
+        localStorage.setItem('hydraulic-gis:basemap', 'hybrid');
+        localStorage.setItem('hydraulic-gis:basemap-v2', '1');
+      } else if (bm && BASEMAPS[bm]) {
+        state.basemap = bm;
+      }
+    } catch (e) {}
+    if (!BASEMAPS[state.basemap]) state.basemap = 'hybrid';
+  }
+
   const SRC_POINTS = 'app-points', SRC_LINES = 'app-lines', SRC_POLYS = 'app-polys', SRC_LABELS = 'app-labels';
 
   // Load persisted state before map creation so the saved basemap takes effect.
   loadState();
+  restoreBasemapPreference();
 
   const SATELLITE_MAX_ZOOM = 20; // allow pinch-zoom past native z18 via overzoom
+  const initialBasemap = BASEMAPS[state.basemap] ? state.basemap : 'hybrid';
+  state.basemap = initialBasemap;
 
   const map = new maplibregl.Map({
     container: 'map',
-    style: BASEMAPS[state.basemap],
+    style: BASEMAPS[initialBasemap],
     center: [-5.0, 33.5],
     zoom: 5,
     // Satellite: native imagery capped at z18 (see BASEMAPS); map can zoom to 20
     // with upscaled tiles. Carto basemaps top out around z19.
     minZoom: 2,
-    maxZoom: isEsriRasterBasemap(state.basemap) ? SATELLITE_MAX_ZOOM : 19,
+    maxZoom: isEsriRasterBasemap(initialBasemap) ? SATELLITE_MAX_ZOOM : 19,
     attributionControl: { compact: true },
 
     // ─── Gesture configuration to avoid conflicts with terra-draw ───
@@ -3310,7 +3332,7 @@
   }
 
   function installDrawControl() {
-    if (drawControl) return;
+    if (document.getElementById('draw-dropdown-wrapper')) return;
     if (DRAW_ENGINE === 'geoman') {
       installDrawControlGeoman();
       return;
@@ -3321,6 +3343,7 @@
       return;
     }
     try {
+      if (!drawControl) {
       // Configure draw modes for tap-to-place behavior (instead of the default
       // click-drag), which is much more usable on touch screens — the user
       // taps a corner, lifts the finger, taps the opposite corner. They can
@@ -3395,6 +3418,7 @@
         }
       }
       for (const d of [0, 50, 200, 500, 1000, 2000]) setTimeout(tryPatchFlags, d);
+      }
 
       // ─── Inject "multi-select" toggle button ─────────────────────────
       // Sits inside the terra-draw toolbar between the Select button and
@@ -4696,23 +4720,39 @@
       installAppLayers();
       restorePersistedMapState();
       updateGrid();
+      // setStyle() drops terra-draw DOM; rebuild the draw toolbar if needed.
+      const staleDrawer = document.getElementById('draw-dropdown-wrapper');
+      if (staleDrawer) staleDrawer.remove();
+      try { installDrawControl(); } catch (_) {}
     });
 
     updateBasemapUi();
   }
 
-  map.once('load', () => {
-    installAppLayers();
-    installDrawControl();
-    initDrawDefaultsUi();
-    restorePersistedMapState();
-    updateGrid();
-    installLabelDragHandlers();
-    // Retry restore — terra-draw layers may not be ready on first tick.
-    requestAnimationFrame(() => restorePersistedMapState());
-    setTimeout(() => restorePersistedMapState(), 300);
-    map.once('idle', () => restorePersistedMapState());
+  map.on('error', (e) => {
+    log.error('[HydraulicGIS] MapLibre error:', e && e.error ? e.error : e);
   });
+
+  function bootstrapMapUi() {
+    try { installAppLayers(); } catch (e) { log.error('[HydraulicGIS] installAppLayers failed:', e); }
+    try { installDrawControl(); } catch (e) { log.error('[HydraulicGIS] installDrawControl failed:', e); }
+    try { initDrawDefaultsUi(); } catch (e) { log.error('[HydraulicGIS] initDrawDefaultsUi failed:', e); }
+    try { restorePersistedMapState(); } catch (e) { log.error('[HydraulicGIS] restore failed:', e); }
+    try { updateGrid(); } catch (_) {}
+    try { installLabelDragHandlers(); } catch (_) {}
+  }
+
+  map.once('load', () => {
+    bootstrapMapUi();
+    // Retry restore — terra-draw layers may not be ready on first tick.
+    requestAnimationFrame(() => { try { restorePersistedMapState(); } catch (_) {} });
+    setTimeout(() => { try { restorePersistedMapState(); } catch (_) {} }, 300);
+    map.once('idle', () => { try { restorePersistedMapState(); } catch (_) {} });
+  });
+  map.on('style.load', () => {
+    try { installAppLayers(); restorePersistedMapState(); } catch (_) {}
+  });
+  [800, 2000, 5000].forEach((ms) => setTimeout(() => { try { installDrawControl(); } catch (_) {} }, ms));
   onFeatures(syncFeaturesToMap);
 
   // Refresh grid (and any other view-bound layers) when the map moves.
