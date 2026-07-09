@@ -941,7 +941,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-09·y (points+coords)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-09·z (coord order)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1071,8 +1071,8 @@
 
       <!-- Status bar (desktop only) -->
       <div id="status-bar" class="float-card">
-        <span><span class="lbl">Lon</span> <span id="sb-lon">—</span></span>
         <span><span class="lbl">Lat</span> <span id="sb-lat">—</span></span>
+        <span><span class="lbl">Lon</span> <span id="sb-lon">—</span></span>
         <span class="sep"></span>
         <span><span class="lbl">X</span> <span id="sb-x">—</span></span>
         <span><span class="lbl">Y</span> <span id="sb-y">—</span></span>
@@ -1333,8 +1333,34 @@
     return { lng: g.coordinates[0], lat: g.coordinates[1] };
   }
 
+  function parseWgsInputPair(a, b) {
+    if (!isFinite(a) || !isFinite(b)) return null;
+    // One value clearly out of latitude range → longitude.
+    if (Math.abs(a) > 90 && Math.abs(b) <= 90) return { lng: a, lat: b };
+    if (Math.abs(b) > 90 && Math.abs(a) <= 90) return { lng: b, lat: a };
+    // Google Maps order: lat, lng (Morocco: lat ~20–36 positive, lng negative).
+    if (a > 0 && a <= 90 && b < 0 && b >= -180) return { lat: a, lng: b };
+    // Classic GIS order: lon, lat.
+    if (a < 0 && b > 0 && b <= 90) return { lng: a, lat: b };
+    // Ambiguous decimals — prefer lat, lng (Google Maps convention).
+    if (Math.abs(a) <= 90 && Math.abs(b) <= 180) return { lat: a, lng: b };
+    return { lng: a, lat: b };
+  }
+
+  function formatWgsPairCopy(lng, lat, decimals = 8) {
+    return `${lat.toFixed(decimals)}, ${lng.toFixed(decimals)}`;
+  }
+
+  function formatWgsPairDisplay(lng, lat, decimals = 6) {
+    return `${lat.toFixed(decimals)}, ${lng.toFixed(decimals)}`;
+  }
+
+  function formatWgsLabeled(lng, lat, decimals = 6) {
+    return `Lat ${lat.toFixed(decimals)}°, Lon ${lng.toFixed(decimals)}°`;
+  }
+
   function formatCoordPairWgs(lng, lat, decimals = 8) {
-    return `${lng.toFixed(decimals)}, ${lat.toFixed(decimals)}`;
+    return formatWgsPairCopy(lng, lat, decimals);
   }
 
   function detachPointFromTerraDraw(f) {
@@ -1685,7 +1711,7 @@
 
   function createNavPoint(lng, lat, nameHint) {
     clearEphemeralMarkers();
-    const nm = nameHint || `Point (${lng.toFixed(5)}, ${lat.toFixed(5)})`;
+    const nm = nameHint || `Point (${formatWgsPairDisplay(lng, lat, 5)})`;
     const f = addFeature({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lng, lat] },
@@ -1794,7 +1820,7 @@
         if (dkm > 100) { skipped++; continue; }
       }
       const coordTxt = crs === 'wgs84'
-        ? `${lng.toFixed(6)}, ${lat.toFixed(6)}`
+        ? formatWgsPairDisplay(lng, lat, 6)
         : `${formatProjected(row.x, 1)} ; ${formatProjected(row.y, 1)}`;
       const label = row.borne ? `${row.borne} (${coordTxt})` : coordTxt;
       pts.push({ lng, lat, x: row.x, y: row.y, crs, label, borne: row.borne });
@@ -5321,8 +5347,8 @@
   function renderPointPropertiesHtml(f) {
     const pt = getFeaturePointCoords(f);
     if (!pt) return '';
-    const wgsLine = formatCoordPairWgs(pt.lng, pt.lat, 8);
-    const wgsDisp = `${pt.lng.toFixed(6)}°, ${pt.lat.toFixed(6)}°`;
+    const wgsLine = formatWgsPairCopy(pt.lng, pt.lat, 8);
+    const wgsDisp = formatWgsLabeled(pt.lng, pt.lat, 6);
     let lambertLine = '', lambertDisp = '';
     try {
       const [x, y] = reproject([pt.lng, pt.lat], 'wgs84', 'lambert-maroc-1');
@@ -5579,7 +5605,7 @@
           }
         }
         const label = crs === 'wgs84'
-          ? `${lng.toFixed(6)}, ${lat.toFixed(6)}`
+          ? formatWgsPairDisplay(lng, lat, 6)
           : `${formatProjected(x, 1)} ; ${formatProjected(y, 1)}`;
         pts.push({ lng, lat, x, y, crs, label });
         if (xIn) xIn.value = '';
@@ -6408,12 +6434,12 @@
 
         <div class="stack-tight">
           <label>
-            <span class="field-label" id="cc-x-lbl">Longitude</span>
-            <input type="text" id="cc-x" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. -5.123456" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
-          </label>
-          <label>
             <span class="field-label" id="cc-y-lbl">Latitude</span>
             <input type="text" id="cc-y" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. 33.987654" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
+          </label>
+          <label>
+            <span class="field-label" id="cc-x-lbl">Longitude</span>
+            <input type="text" id="cc-x" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. -5.123456" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
           </label>
           <button class="btn btn-subtle" id="cc-pick" style="width:100%;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>
@@ -6451,10 +6477,10 @@
   function renderHist(h) {
     const inIs = CRS_BY_ID[h.from], outIs = CRS_BY_ID[h.to];
     const inText = inIs.isGeographic
-      ? `${formatDecimal(h.in[0])}, ${formatDecimal(h.in[1])}`
+      ? formatWgsPairDisplay(h.in[0], h.in[1], 6)
       : `${formatProjected(h.in[0])}, ${formatProjected(h.in[1])}`;
     const outText = outIs.isGeographic
-      ? `${formatDecimal(h.out[0])}, ${formatDecimal(h.out[1])}`
+      ? formatWgsPairDisplay(h.out[0], h.out[1], 6)
       : `${formatProjected(h.out[0])}, ${formatProjected(h.out[1])}`;
     return `<div class="hist-item">
       <div class="label">${inIs.label} → ${outIs.label}</div>
@@ -6620,22 +6646,20 @@
       if (!resultEl) return;
       const outCrs = CRS_BY_ID[toId];
       const [lng, lat] = coordsToWgs84(out, toId);
-      const outX = outCrs.isGeographic ? out[0].toFixed(8) : out[0].toFixed(3);
-      const outY = outCrs.isGeographic ? out[1].toFixed(8) : out[1].toFixed(3);
-      const outDispX = outCrs.isGeographic ? `${out[0].toFixed(6)}°` : formatProjected(out[0], 3);
-      const outDispY = outCrs.isGeographic ? `${out[1].toFixed(6)}°` : formatProjected(out[1], 3);
+      const outDispX = outCrs.isGeographic ? `${out[1].toFixed(6)}°` : formatProjected(out[0], 3);
+      const outDispY = outCrs.isGeographic ? `${out[0].toFixed(6)}°` : formatProjected(out[1], 3);
       const copyLine = outCrs.isGeographic
-        ? formatCoordPairWgs(out[0], out[1], 8)
+        ? formatWgsPairCopy(out[0], out[1], 8)
         : `${out[0].toFixed(3)}, ${out[1].toFixed(3)}`;
-      const wgsCopy = formatCoordPairWgs(lng, lat, 8);
+      const wgsCopy = formatWgsPairCopy(lng, lat, 8);
       const gmaps = googleMapsUrl(lat, lng);
       resultEl.style.display = 'block';
       resultEl.innerHTML = `
         <div class="field-label" style="margin-bottom:6px;">Résultat — ${escapeHtml(outCrs.label)}</div>
         <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); margin-bottom:4px;">
-          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.axes[0])} :</span> ${outDispX}</div>
-          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.axes[1])} :</span> ${outDispY}</div>
-          <div style="margin-top:6px; font-size:11px; color:var(--ink-2);">WGS84 : ${lng.toFixed(6)}°, ${lat.toFixed(6)}°</div>
+          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.isGeographic ? 'Latitude' : outCrs.axes[0])} :</span> ${outDispX}</div>
+          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.isGeographic ? 'Longitude' : outCrs.axes[1])} :</span> ${outDispY}</div>
+          <div style="margin-top:6px; font-size:11px; color:var(--ink-2);">WGS84 (lat, lon) : ${formatWgsPairDisplay(lng, lat, 6)}</div>
         </div>
         <div class="row" style="gap:6px; flex-wrap:wrap; margin-top:8px;">
           <button type="button" class="btn btn-ghost" id="cc-copy-result" style="flex:1; min-width:120px;">Copier résultat</button>
@@ -6722,7 +6746,7 @@
       // Also: cap by the map's maxZoom in case the user has overridden it.
       const targetZoom = Math.min(13, map.getMaxZoom());
       map.flyTo({ center: [lng, lat], zoom: targetZoom, essential: true });
-      createNavPoint(lng, lat, `Point (${lng.toFixed(5)}, ${lat.toFixed(5)})`);
+      createNavPoint(lng, lat, `Point (${formatWgsPairDisplay(lng, lat, 5)})`);
     });
   }
 
@@ -6741,7 +6765,7 @@
         <div>
           <label class="field-label">Importer</label>
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 8px;">
-            Formats supportés : GeoJSON, JSON, CSV (avec colonnes longitude/latitude).
+            Formats supportés : GeoJSON, JSON, CSV (colonnes latitude/longitude).
           </p>
           <button class="btn btn-subtle" id="files-import" style="width:100%;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 10l6 6 6-6M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -6782,21 +6806,21 @@
     return `
       <div class="stack">
         <p style="font-size:12px; color:var(--ink-1); margin:0;">
-          Saisissez des coordonnées WGS84 (lon, lat) ou Lambert Maroc (X, Y) — la carte sera centrée sur ce point.
+          Saisissez des coordonnées WGS84 (lat, lon) ou Lambert Maroc (X, Y) — la carte sera centrée sur ce point.
         </p>
 
         <div>
           <label class="field-label">Système</label>
           <select id="sr-crs" class="field">
-            <option value="wgs84">GPS (WGS84) — lon, lat</option>
+            <option value="wgs84">GPS (WGS84) — lat, lon</option>
             <option value="lambert-maroc-1">Maroc Lambert Zone 1 — X, Y</option>
           </select>
         </div>
 
         <div>
-          <label class="field-label" id="sr-x-lbl">Longitude (ou X, Y séparés par une virgule)</label>
+          <label class="field-label" id="sr-x-lbl">Coordonnées (lat, lon ou X, Y)</label>
           <input type="text" id="sr-input" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false"
-                 placeholder="ex. -8.0083, 31.6295 ou 31.6295 -8.0083"
+                 placeholder="ex. 31.6295, -8.0083"
                  style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
         </div>
 
@@ -6815,9 +6839,9 @@
         <div class="surface" style="font-size:12px;">
           <div style="font-weight:500; margin-bottom:6px;">Exemples :</div>
           <div style="font-family:'JetBrains Mono',ui-monospace,monospace; color:var(--ink-1); line-height:1.6;">
-            • Marrakech : <span style="color:var(--brand); cursor:pointer;" data-fill="-8.0083, 31.6295">-8.0083, 31.6295</span><br/>
-            • Casablanca : <span style="color:var(--brand); cursor:pointer;" data-fill="-7.5898, 33.5731">-7.5898, 33.5731</span><br/>
-            • Rabat : <span style="color:var(--brand); cursor:pointer;" data-fill="-6.8326, 34.0209">-6.8326, 34.0209</span>
+            • Marrakech : <span style="color:var(--brand); cursor:pointer;" data-fill="31.6295, -8.0083">31.6295, -8.0083</span><br/>
+            • Casablanca : <span style="color:var(--brand); cursor:pointer;" data-fill="33.5731, -7.5898">33.5731, -7.5898</span><br/>
+            • Rabat : <span style="color:var(--brand); cursor:pointer;" data-fill="34.0209, -6.8326">34.0209, -6.8326</span>
           </div>
         </div>
 
@@ -6856,12 +6880,10 @@
 
       let lng, lat;
       if (crsSel.value === 'wgs84') {
-        // Heuristic: if first |a| > 90, user gave lat,lon; otherwise lon,lat.
-        if (Math.abs(a) > 90 && Math.abs(b) <= 90) { lat = a; lng = b; }
-        else if (Math.abs(b) > 90 && Math.abs(a) <= 90) { lng = b; lat = a; }
-        else { lng = a; lat = b; }
-        // For Morocco, lat is positive 21-36, lon is negative -17 to -1. Sanity-flip.
-        if (lat > -10 && lat < 0 && lng > 20 && lng < 40) { const t = lat; lat = lng; lng = t; }
+        const parsed = parseWgsInputPair(a, b);
+        if (!parsed) { errEl.textContent = 'Coordonnées invalides.'; return; }
+        lng = parsed.lng;
+        lat = parsed.lat;
       } else {
         // Lambert: a=X, b=Y
         const wgs = reproject([a, b], 'lambert-maroc-1', 'wgs84');
@@ -6873,7 +6895,7 @@
       }
 
       // Register as a deletable point object in Calques.
-      createNavPoint(lng, lat, raw || `Point (${lng.toFixed(5)}, ${lat.toFixed(5)})`);
+      createNavPoint(lng, lat, raw || `Point (${formatWgsPairDisplay(lng, lat, 5)})`);
       map.flyTo({ center: [lng, lat], zoom: Math.min(13, map.getMaxZoom()), essential: true });
 
       // Add to history
@@ -7527,11 +7549,11 @@
       const kml = featuresToKML(fc);
       saveAs(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), 'projet.kml');
     } else if (format === 'csv') {
-      const rows = ['id,name,kind,longitude,latitude'];
+      const rows = ['id,name,kind,latitude,longitude'];
       for (const f of features) {
         const c = pointCoord(f);
         if (!c) continue;
-        rows.push([escapeCsv(f.id), escapeCsv(f.name), f.kind, c[0].toFixed(6), c[1].toFixed(6)].join(','));
+        rows.push([escapeCsv(f.id), escapeCsv(f.name), f.kind, c[1].toFixed(6), c[0].toFixed(6)].join(','));
       }
       saveAs(new Blob([rows.join('\n')], { type: 'text/csv' }), 'projet.csv');
     } else if (format === 'txt') {
@@ -7541,7 +7563,7 @@
         if (f.metrics.lengthMeters !== undefined) lines.push(`  Longueur : ${formatDistance(f.metrics.lengthMeters)}`);
         if (f.metrics.areaSquareMeters !== undefined) lines.push(`  Surface  : ${formatArea(f.metrics.areaSquareMeters)}`);
         const c = pointCoord(f);
-        if (c) lines.push(`  Centre   : ${c[0].toFixed(6)}, ${c[1].toFixed(6)}`);
+        if (c) lines.push(`  Centre   : ${formatWgsPairDisplay(c[0], c[1], 6)}`);
         lines.push('');
       }
       saveAs(new Blob([lines.join('\n')], { type: 'text/plain' }), 'projet.txt');
