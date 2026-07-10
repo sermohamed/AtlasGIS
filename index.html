@@ -967,7 +967,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-10·ac (basemap fix v2)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-10·ad (coords+grid+edit)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1365,6 +1365,50 @@
   function coordsToWgs84(xy, crsId) {
     if (crsId === 'wgs84') return xy.slice();
     return reproject(xy, crsId, 'wgs84');
+  }
+
+  function normCoordNumberString(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/[\s\u00A0\u202F\u2007]/g, '')
+      .replace(/,/g, '.');
+  }
+
+  /** Read two UI fields → [x,y] in CRS convention ([lng,lat] for WGS84, [X,Y] for Lambert). */
+  function readCoordPairFromUi(crsId, fieldAVal, fieldBVal) {
+    const c = CRS_BY_ID[crsId];
+    if (!c) return null;
+    if (c.isGeographic) {
+      const lat = parseCoord(fieldAVal);
+      const lon = parseCoord(fieldBVal);
+      if (lat === null || lon === null) return null;
+      const pair = parseWgsInputPair(lat, lon);
+      if (!pair) return null;
+      return [pair.lng, pair.lat];
+    }
+    const x = parseFloat(normCoordNumberString(fieldAVal));
+    const y = parseFloat(normCoordNumberString(fieldBVal));
+    if (isNaN(x) || isNaN(y)) return null;
+    return [x, y];
+  }
+
+  function formatCoordFieldsForCrs(crsId, xy) {
+    const c = CRS_BY_ID[crsId];
+    if (!c || !xy) return { a: '', b: '' };
+    if (c.isGeographic) {
+      return { a: xy[1].toFixed(8), b: xy[0].toFixed(8) };
+    }
+    return { a: xy[0].toFixed(3), b: xy[1].toFixed(3) };
+  }
+
+  function flyToWgsPoint(lng, lat, nameHint) {
+    if (!isFinite(lng) || !isFinite(lat) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return false;
+    }
+    const targetZoom = Math.min(13, map.getMaxZoom());
+    map.flyTo({ center: [lng, lat], zoom: targetZoom, essential: true });
+    createNavPoint(lng, lat, nameHint || `Point (${formatWgsPairDisplay(lng, lat, 5)})`);
+    return true;
   }
 
   function getFeaturePointCoords(f) {
@@ -1923,6 +1967,10 @@
         }
       } catch (err) { log.warn('[HydraulicGIS] removeFeatures failed:', err); }
     }
+    if (labelHandleMarkers.has(id)) {
+      try { labelHandleMarkers.get(id).remove(); } catch (_) {}
+      labelHandleMarkers.delete(id);
+    }
     state.features = state.features.filter(f2 => f2.id !== id);
     state.selectedIds = state.selectedIds.filter(x => x !== id);
     // Immediately flush labels so deleted objects cannot leave ghost names.
@@ -1948,6 +1996,7 @@
     // Ensure renderer-derived overlays cannot remain as ghosts after deletion.
     try { if (typeof syncDerivedLayer === 'function') syncDerivedLayer(); } catch (_) {}
     try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
+    try { syncLabelHandles(); } catch (_) {}
   }
 
   function clearAllFeatures() {
@@ -3737,6 +3786,24 @@
           };
 
           children.appendChild(editBtn);
+
+          const delVtxBtn = document.createElement('button');
+          delVtxBtn.id = 'hgis-del-vertex-btn';
+          delVtxBtn.type = 'button';
+          delVtxBtn.title = 'Supprimer le sommet sélectionné';
+          delVtxBtn.setAttribute('aria-label', 'Supprimer le sommet sélectionné');
+          delVtxBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
+          delVtxBtn.style.cssText = 'background-image:none; background-color:transparent;';
+          delVtxBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:block;margin:auto;"><circle cx="12" cy="12" r="3"/><path d="M8 12h8"/></svg>`;
+          delVtxBtn.onclick = (ev) => {
+            if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+            try {
+              const canvas = map.getCanvas();
+              canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', code: 'Delete', bubbles: true, cancelable: true }));
+            } catch (_) {}
+          };
+          children.appendChild(delVtxBtn);
+
           children.appendChild(multiBtn);
           children.appendChild(delBtn);
 
@@ -6555,14 +6622,14 @@
           </select>
         </div>
 
-        <div class="stack-tight">
+        <div class="stack-tight" id="cc-coord-fields">
           <label>
-            <span class="field-label" id="cc-y-lbl">Latitude</span>
-            <input type="text" id="cc-y" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. 33.987654" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
+            <span class="field-label" id="cc-a-lbl">Latitude</span>
+            <input type="text" id="cc-a" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. 33.987654" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
           </label>
           <label>
-            <span class="field-label" id="cc-x-lbl">Longitude</span>
-            <input type="text" id="cc-x" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. -5.123456" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
+            <span class="field-label" id="cc-b-lbl">Longitude</span>
+            <input type="text" id="cc-b" class="field" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ex. -5.123456" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
           </label>
           <button class="btn btn-subtle" id="cc-pick" style="width:100%;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>
@@ -6616,67 +6683,60 @@
     const fromSel = root.querySelector('#cc-from');
     const toSel = root.querySelector('#cc-to');
     const fmtSel = root.querySelector('#cc-format');
-    const xIn = root.querySelector('#cc-x');
-    const yIn = root.querySelector('#cc-y');
-    const xLbl = root.querySelector('#cc-x-lbl');
-    const yLbl = root.querySelector('#cc-y-lbl');
+    const aIn = root.querySelector('#cc-a');
+    const bIn = root.querySelector('#cc-b');
+    const aLbl = root.querySelector('#cc-a-lbl');
+    const bLbl = root.querySelector('#cc-b-lbl');
     const pickBtn = root.querySelector('#cc-pick');
     const pickLbl = root.querySelector('#cc-pick-lbl');
     const errEl = root.querySelector('#cc-error');
 
-    // Defaults
     fromSel.value = 'wgs84';
     toSel.value = 'lambert-maroc-1';
 
-    // If a pick was performed while the panel was closed (mobile flow),
-    // restore the source CRS used at pick-time and inject the values now.
     if (ui._pendingPickResult) {
       const pending = ui._pendingPickResult;
       ui._pendingPickResult = null;
       fromSel.value = pending.fromCrs;
-      // updateLabels() runs below — the values must be set AFTER it so the
-      // placeholder doesn't fight with the actual content. We defer via
-      // setTimeout because updateLabels() is registered as the 'change'
-      // handler on fromSel and won't run until the field actually changes.
       setTimeout(() => {
-        xIn.value = pending.x;
-        yIn.value = pending.y;
+        if (aIn) aIn.value = pending.a || '';
+        if (bIn) bIn.value = pending.b || '';
       }, 0);
     }
 
     function updateLabels() {
       const c = CRS_BY_ID[fromSel.value];
-      xLbl.textContent = c.axes[0];
-      yLbl.textContent = c.axes[1];
+      if (c.isGeographic) {
+        aLbl.textContent = 'Latitude';
+        bLbl.textContent = 'Longitude';
+        aIn.placeholder = "ex. 33.987654 ou 33° 59' 15.55\" N";
+        bIn.placeholder = "ex. -5.123456 ou 5° 7' 24\" W";
+      } else {
+        aLbl.textContent = c.axes[0];
+        bLbl.textContent = c.axes[1];
+        aIn.placeholder = 'ex. 500000.00';
+        bIn.placeholder = 'ex. 300000.00';
+      }
       fmtSel.style.display = c.isGeographic ? 'block' : 'none';
-      xIn.placeholder = c.isGeographic ? "ex. -5.123456 ou 5° 7' 24\" W" : 'ex. 500000.00';
-      yIn.placeholder = c.isGeographic ? "ex. 33.987654 ou 33° 59' 15.55\" N" : 'ex. 300000.00';
     }
     updateLabels();
     fromSel.addEventListener('change', updateLabels);
 
     function parseInputs() {
-      const c = CRS_BY_ID[fromSel.value];
-      // Normalise the input: strip whitespace including NBSP/thin space,
-      // remove thousands separators, normalise commas to dots. This makes
-      // the parser tolerant to copy-pasted values from the history panel
-      // (which formats with French locale: "500 000,00").
-      const norm = (s) => {
-        if (!s) return '';
-        return String(s)
-          .replace(/[\s\u00A0\u202F\u2007]/g, '')   // any whitespace + NBSP + narrow NBSP + figure space
-          .replace(/,/g, '.');
-      };
-      if (c.isGeographic) {
-        const x = parseCoord(xIn.value);
-        const y = parseCoord(yIn.value);
-        if (x === null || y === null) return null;
-        return [x, y];
+      return readCoordPairFromUi(fromSel.value, aIn.value, bIn.value);
+    }
+
+    function resolveFlyWgs84() {
+      const resultEl = root.querySelector('#cc-result');
+      if (ui._lastCoordConversion && resultEl && resultEl.style.display !== 'none') {
+        const wgs = coordsToWgs84(ui._lastCoordConversion.out, ui._lastCoordConversion.to);
+        if (wgs && wgs.length >= 2 && isFinite(wgs[0]) && isFinite(wgs[1])) return wgs;
       }
-      const x = parseFloat(norm(xIn.value));
-      const y = parseFloat(norm(yIn.value));
-      if (isNaN(x) || isNaN(y)) return null;
-      return [x, y];
+      const inp = parseInputs();
+      if (!inp) return null;
+      const wgs = coordsToWgs84(inp, fromSel.value);
+      if (!wgs || wgs.length < 2 || !isFinite(wgs[0]) || !isFinite(wgs[1])) return null;
+      return wgs;
     }
 
     pickBtn.addEventListener('click', () => {
@@ -6733,14 +6793,9 @@
       const onClick = (e) => {
         const { lng, lat } = e.lngLat;
         const c = CRS_BY_ID[fromSel.value];
-        const [x, y] = c.id === 'wgs84' ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
-        // Re-query the input elements because if the panel was reopened,
-        // the previous DOM nodes were destroyed by the panel re-render.
-        // We update via a safe lookup on the visible sheet content.
-        const xUpdated = c.isGeographic ? x.toFixed(8) : x.toFixed(3);
-        const yUpdated = c.isGeographic ? y.toFixed(8) : y.toFixed(3);
-        // Stash on the global so the panel re-init can pick them up.
-        ui._pendingPickResult = { x: xUpdated, y: yUpdated, fromCrs: fromSel.value };
+        const xy = c.id === 'wgs84' ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
+        const fields = formatCoordFieldsForCrs(c.id, xy);
+        ui._pendingPickResult = { a: fields.a, b: fields.b, fromCrs: fromSel.value };
         pickModeOff = null;
         cleanup();
         reopenSheet();
@@ -6760,7 +6815,10 @@
     root.querySelector('#cc-swap').addEventListener('click', () => {
       const a = fromSel.value, b = toSel.value;
       fromSel.value = b; toSel.value = a;
-      xIn.value = ''; yIn.value = '';
+      aIn.value = ''; bIn.value = '';
+      ui._lastCoordConversion = null;
+      const resultEl = root.querySelector('#cc-result');
+      if (resultEl) resultEl.style.display = 'none';
       updateLabels();
     });
 
@@ -6769,10 +6827,12 @@
       if (!resultEl) return;
       const outCrs = CRS_BY_ID[toId];
       const [lng, lat] = coordsToWgs84(out, toId);
-      const outDispX = outCrs.isGeographic ? `${out[1].toFixed(6)}°` : formatProjected(out[0], 3);
-      const outDispY = outCrs.isGeographic ? `${out[0].toFixed(6)}°` : formatProjected(out[1], 3);
+      const labelA = outCrs.isGeographic ? 'Latitude' : outCrs.axes[0];
+      const labelB = outCrs.isGeographic ? 'Longitude' : outCrs.axes[1];
+      const outDispA = outCrs.isGeographic ? `${lat.toFixed(6)}°` : formatProjected(out[0], 3);
+      const outDispB = outCrs.isGeographic ? `${lng.toFixed(6)}°` : formatProjected(out[1], 3);
       const copyLine = outCrs.isGeographic
-        ? formatWgsPairCopy(out[0], out[1], 8)
+        ? formatWgsPairCopy(lng, lat, 8)
         : `${out[0].toFixed(3)}, ${out[1].toFixed(3)}`;
       const wgsCopy = formatWgsPairCopy(lng, lat, 8);
       const gmaps = googleMapsUrl(lat, lng);
@@ -6780,8 +6840,8 @@
       resultEl.innerHTML = `
         <div class="field-label" style="margin-bottom:6px;">Résultat — ${escapeHtml(outCrs.label)}</div>
         <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); margin-bottom:4px;">
-          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.isGeographic ? 'Latitude' : outCrs.axes[0])} :</span> ${outDispX}</div>
-          <div><span style="color:var(--ink-2)">${escapeHtml(outCrs.isGeographic ? 'Longitude' : outCrs.axes[1])} :</span> ${outDispY}</div>
+          <div><span style="color:var(--ink-2)">${escapeHtml(labelA)} :</span> ${outDispA}</div>
+          <div><span style="color:var(--ink-2)">${escapeHtml(labelB)} :</span> ${outDispB}</div>
           <div style="margin-top:6px; font-size:11px; color:var(--ink-2);">WGS84 (lat, lon) : ${formatWgsPairDisplay(lng, lat, 6)}</div>
         </div>
         <div class="row" style="gap:6px; flex-wrap:wrap; margin-top:8px;">
@@ -6808,6 +6868,7 @@
       const inp = parseInputs();
       if (!inp) { errEl.textContent = 'Coordonnées invalides — vérifiez le format.'; return; }
       const out = reproject(inp, fromSel.value, toSel.value);
+      ui._lastCoordConversion = { from: fromSel.value, to: toSel.value, in: inp, out };
       coordHistory.unshift({ from: fromSel.value, to: toSel.value, in: inp, out, ts: Date.now() });
       coordHistory = coordHistory.slice(0, 20);
       showConvertResult(out, fromSel.value, toSel.value);
@@ -6859,17 +6920,12 @@
 
     root.querySelector('#cc-fly').addEventListener('click', () => {
       errEl.textContent = '';
-      const inp = parseInputs();
-      if (!inp) { errEl.textContent = 'Coordonnées invalides.'; return; }
-      const [lng, lat] = fromSel.value === 'wgs84' ? inp : reproject(inp, fromSel.value, 'wgs84');
-      // Use a reasonable zoom that always has imagery available worldwide.
-      // z13 is a city/neighbourhood view (~5km across) — close enough to
-      // identify the location, far enough to work in low-resolution areas
-      // (rural Morocco, deserts) where ESRI doesn't have z18+ tiles.
-      // Also: cap by the map's maxZoom in case the user has overridden it.
-      const targetZoom = Math.min(13, map.getMaxZoom());
-      map.flyTo({ center: [lng, lat], zoom: targetZoom, essential: true });
-      createNavPoint(lng, lat, `Point (${formatWgsPairDisplay(lng, lat, 5)})`);
+      const wgs = resolveFlyWgs84();
+      if (!wgs) { errEl.textContent = 'Coordonnées invalides — saisissez ou convertissez d\'abord.'; return; }
+      const [lng, lat] = wgs;
+      if (!flyToWgsPoint(lng, lat)) {
+        errEl.textContent = 'Coordonnées hors limites.';
+      }
     });
   }
 
@@ -7421,10 +7477,11 @@
         layout: {
           'text-field': ['get', 'label'],
           'text-size': 10,
-          'text-allow-overlap': false,
-          'text-ignore-placement': false,
-          'text-anchor': 'bottom-left',
-          'text-offset': [0.3, -0.3],
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          'text-optional': false,
+          'text-anchor': ['coalesce', ['get', 'anchor'], 'bottom-left'],
+          'text-offset': [0.15, 0.1],
         },
         paint: {
           'text-color': '#aab4c2',
@@ -7455,6 +7512,16 @@
     const minLng = b.getWest(), maxLng = b.getEast();
     const minLat = b.getSouth(), maxLat = b.getNorth();
     const lines = [], labels = [];
+    const southmost = (coords) => {
+      let best = coords[0];
+      for (const p of coords) if (p[1] < best[1]) best = p;
+      return best;
+    };
+    const westmost = (coords) => {
+      let best = coords[0];
+      for (const p of coords) if (p[0] < best[0]) best = p;
+      return best;
+    };
 
     if (gridState.crs === 'wgs84') {
       // Spacing in degrees
@@ -7477,13 +7544,21 @@
       for (let x = x0; x <= x1 + 1e-9; x += dx) {
         const xc = +x.toFixed(8);
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[xc, minLat], [xc, maxLat]] } });
-        labels.push({ type: 'Feature', properties: { label: gridLabelDeg(xc, 'lon') }, geometry: { type: 'Point', coordinates: [xc, minLat + (maxLat - minLat) * 0.02] } });
+        labels.push({
+          type: 'Feature',
+          properties: { label: gridLabelDeg(xc, 'lon'), anchor: 'top' },
+          geometry: { type: 'Point', coordinates: [xc, minLat] },
+        });
       }
       // Horizontal lines (constant lat)
       for (let y = y0; y <= y1 + 1e-9; y += dx) {
         const yc = +y.toFixed(8);
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[minLng, yc], [maxLng, yc]] } });
-        labels.push({ type: 'Feature', properties: { label: gridLabelDeg(yc, 'lat') }, geometry: { type: 'Point', coordinates: [minLng + (maxLng - minLng) * 0.02, yc] } });
+        labels.push({
+          type: 'Feature',
+          properties: { label: gridLabelDeg(yc, 'lat'), anchor: 'right' },
+          geometry: { type: 'Point', coordinates: [minLng, yc] },
+        });
       }
     } else {
       // Lambert grid: convert visible bbox corners to Lambert, find rounded grid lines, convert back.
@@ -7522,7 +7597,11 @@
           seg.push(wgs);
         }
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: seg } });
-        labels.push({ type: 'Feature', properties: { label: 'X ' + gridLabelMeters(x) }, geometry: { type: 'Point', coordinates: seg[0] } });
+        labels.push({
+          type: 'Feature',
+          properties: { label: 'X ' + gridLabelMeters(x), anchor: 'top' },
+          geometry: { type: 'Point', coordinates: southmost(seg) },
+        });
       }
       for (let y = y0; y <= y1 + 1; y += dx) {
         const seg = [];
@@ -7532,7 +7611,11 @@
           seg.push(wgs);
         }
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: seg } });
-        labels.push({ type: 'Feature', properties: { label: 'Y ' + gridLabelMeters(y) }, geometry: { type: 'Point', coordinates: seg[0] } });
+        labels.push({
+          type: 'Feature',
+          properties: { label: 'Y ' + gridLabelMeters(y), anchor: 'right' },
+          geometry: { type: 'Point', coordinates: westmost(seg) },
+        });
       }
     }
     return { lines, labels };
@@ -7838,7 +7921,8 @@
         else ui.setPanel(null);
       }
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
-      // Delete selected features
+      // In geometry edit mode, let terra-draw delete the selected vertex.
+      if (isEditModeActive()) return;
       if (state.selectedIds.length > 0) {
         e.preventDefault();
         const n = state.selectedIds.length;
