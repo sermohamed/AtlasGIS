@@ -967,7 +967,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-10·ad (coords+grid+edit)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-15·ae (coords+grid+vertex)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1285,6 +1285,8 @@
      initialization" errors. Real values are still assigned later — these
      are just safe defaults. */
   var coordHistory = [];
+  /** Last WGS84 [lng, lat] from coordinate converter — used by « Aller à ». */
+  var lastCoordFlyTarget = null;
   var searchHistory = [];
   var searchMarker = null;
   var flyToMarker = null;
@@ -1973,6 +1975,12 @@
     }
     state.features = state.features.filter(f2 => f2.id !== id);
     state.selectedIds = state.selectedIds.filter(x => x !== id);
+    for (const [hid, marker] of Array.from(labelHandleMarkers.entries())) {
+      if (!state.features.some(f2 => f2.id === hid)) {
+        try { marker.remove(); } catch (_) {}
+        labelHandleMarkers.delete(hid);
+      }
+    }
     // Immediately flush labels so deleted objects cannot leave ghost names.
     try { applyLabelFeatures(buildLabelFeatures()); } catch (_) {}
     // Prune elevation labels and derived overlays tied to deleted features.
@@ -2523,6 +2531,19 @@
     }
     if (enabled) {
       selMode.flags = JSON.parse(JSON.stringify(_originalSelectFlags));
+      // Guarantee vertex edit/delete flags (some builds store coordinates:false).
+      for (const modeName of Object.keys(selMode.flags)) {
+        const entry = selMode.flags[modeName];
+        if (!entry || !entry.feature) continue;
+        const c = entry.feature.coordinates;
+        if (c === true || c == null) {
+          entry.feature.coordinates = { midpoints: true, draggable: true, deletable: true };
+        } else if (typeof c === 'object') {
+          entry.feature.coordinates.midpoints = true;
+          entry.feature.coordinates.draggable = true;
+          entry.feature.coordinates.deletable = true;
+        }
+      }
     } else {
       const noEditFlags = {};
       for (const modeName of Object.keys(_originalSelectFlags)) {
@@ -2966,6 +2987,169 @@
     _labelDrag = { active: false, featureId: null, pointerId: null };
     try { map.dragPan.enable(); } catch (_) {}
     clearLabelHandleMarkers();
+  }
+
+  /* ─── Vertex long-press delete (edit mode) ───────────────────────────── */
+  const VERTEX_LONG_PRESS_MS = 2500;
+  const VERTEX_HIT_PX = 18;
+  const VERTEX_MOVE_CANCEL_PX = 12;
+  let _vtxPress = null;
+  let _vtxLongPressInstalled = false;
+  let _vtxHoldMarker = null;
+
+  function canvasPointFromEvent(ev) {
+    const canvas = map.getCanvas();
+    const rect = canvas.getBoundingClientRect();
+    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+  }
+
+  function getSelectedEditableFeature() {
+    if (!isEditModeActive() || !state.selectedIds.length) return null;
+    const f = state.features.find(x => x.id === state.selectedIds[0]);
+    if (!f || isDerivedFeature(f) || !f.geojson?.properties?._terraId) return null;
+    const g = f.geojson.geometry;
+    if (!g || (g.type !== 'LineString' && g.type !== 'Polygon')) return null;
+    return f;
+  }
+
+  function findVertexHitAtPixel(point) {
+    const f = getSelectedEditableFeature();
+    if (!f) return null;
+    const g = f.geojson.geometry;
+    const ring = g.type === 'Polygon' ? g.coordinates[0] : g.coordinates;
+    const isPoly = g.type === 'Polygon';
+    const count = isPoly ? Math.max(0, ring.length - 1) : ring.length;
+    let best = null;
+    let bestD = VERTEX_HIT_PX;
+    for (let i = 0; i < count; i++) {
+      const p = map.project(ring[i]);
+      const d = Math.hypot(p.x - point.x, p.y - point.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = {
+          terraId: f.geojson.properties._terraId,
+          featureId: f.id,
+          index: i,
+          geomType: g.type,
+          coord: ring[i].slice(),
+        };
+      }
+    }
+    return best;
+  }
+
+  function clearVertexHoldMarker() {
+    if (_vtxHoldMarker) {
+      try { _vtxHoldMarker.remove(); } catch (_) {}
+      _vtxHoldMarker = null;
+    }
+  }
+
+  function cancelVertexLongPress() {
+    if (_vtxPress && _vtxPress.timer) clearTimeout(_vtxPress.timer);
+    _vtxPress = null;
+    clearVertexHoldMarker();
+  }
+
+  function deleteFeatureVertex(hit) {
+    const td = drawControl?.getTerraDrawInstance?.();
+    if (!td || !hit || !td._store || typeof td._store.updateGeometry !== 'function') return false;
+    const snap = td.getSnapshot ? td.getSnapshot() : [];
+    const tf = snap.find(x => String(x.id) === String(hit.terraId));
+    if (!tf || !tf.geometry) return false;
+    const geom = JSON.parse(JSON.stringify(tf.geometry));
+    if (geom.type === 'Polygon') {
+      const ring = geom.coordinates[0];
+      if (ring.length <= 4) return false;
+      const idx = hit.index;
+      if (idx === 0 || idx === ring.length - 1) {
+        ring.shift();
+        ring.pop();
+        ring.push([ring[0][0], ring[0][1]]);
+      } else {
+        ring.splice(idx, 1);
+      }
+    } else if (geom.type === 'LineString') {
+      const coords = geom.coordinates;
+      if (coords.length <= 3) return false;
+      coords.splice(hit.index, 1);
+    } else {
+      return false;
+    }
+    try {
+      td._store.updateGeometry([{ id: hit.terraId, geometry: geom }]);
+      const ours = state.features.find(x => x.id === hit.featureId);
+      if (ours) {
+        ours.geojson.geometry = geom;
+        ours.metrics = computeMetrics(ours.geojson, ours.kind);
+        ours.updatedAt = Date.now();
+      }
+      notifyFeatures();
+      try {
+        td.setMode('select');
+        setSelectEditFlags(td, true);
+        td.selectFeature(hit.terraId);
+      } catch (_) {}
+      try { syncSelectionHighlight(); } catch (_) {}
+      try { syncLabelHandles(); } catch (_) {}
+      try { map.triggerRepaint(); } catch (_) {}
+      return true;
+    } catch (err) {
+      log.warn('[HydraulicGIS] deleteFeatureVertex failed:', err);
+      return false;
+    }
+  }
+
+  function installVertexLongPressDelete() {
+    if (_vtxLongPressInstalled) return;
+    _vtxLongPressInstalled = true;
+    const canvas = map.getCanvas();
+
+    canvas.addEventListener('pointerdown', (ev) => {
+      if (!ev.isPrimary || !isEditModeActive()) return;
+      const point = canvasPointFromEvent(ev);
+      const hit = findVertexHitAtPixel(point);
+      if (!hit) return;
+      cancelVertexLongPress();
+      _vtxPress = {
+        hit,
+        startX: point.x,
+        startY: point.y,
+        pointerId: ev.pointerId,
+        timer: setTimeout(() => {
+          const pending = _vtxPress && _vtxPress.hit;
+          cancelVertexLongPress();
+          if (!pending || !isEditModeActive()) return;
+          ui.confirm(
+            'Supprimer ce sommet ?',
+            'Ce point sera retiré de l\'objet. Continuer ?',
+            () => { deleteFeatureVertex(pending); }
+          );
+        }, VERTEX_LONG_PRESS_MS),
+      };
+      try {
+        clearVertexHoldMarker();
+        const el = document.createElement('div');
+        el.style.cssText = 'width:22px;height:22px;border-radius:50%;border:2px solid #ff6b6b;background:rgba(255,107,107,0.25);box-shadow:0 0 0 2px rgba(0,0,0,0.35);';
+        _vtxHoldMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+          .setLngLat(hit.coord)
+          .addTo(map);
+      } catch (_) {}
+    }, true);
+
+    canvas.addEventListener('pointermove', (ev) => {
+      if (!_vtxPress || ev.pointerId !== _vtxPress.pointerId) return;
+      const point = canvasPointFromEvent(ev);
+      const dx = point.x - _vtxPress.startX;
+      const dy = point.y - _vtxPress.startY;
+      if (Math.hypot(dx, dy) > VERTEX_MOVE_CANCEL_PX) cancelVertexLongPress();
+    }, true);
+
+    canvas.addEventListener('pointerup', (ev) => {
+      if (!_vtxPress || ev.pointerId !== _vtxPress.pointerId) return;
+      cancelVertexLongPress();
+    }, true);
+    canvas.addEventListener('pointercancel', () => { cancelVertexLongPress(); }, true);
   }
 
   function syncFeaturesToMap() {
@@ -3696,7 +3880,7 @@
           const editBtn = document.createElement('button');
           editBtn.id = 'hgis-edit-btn';
           editBtn.type = 'button';
-          editBtn.title = 'Éditer (déplacer les sommets)';
+          editBtn.title = 'Éditer (déplacer les sommets — maintenir 2,5 s sur un sommet pour supprimer)';
           editBtn.setAttribute('aria-label', 'Éditer la sélection');
           editBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
           editBtn.style.cssText = 'background-image:none; background-color:transparent;';
@@ -3787,23 +3971,6 @@
 
           children.appendChild(editBtn);
 
-          const delVtxBtn = document.createElement('button');
-          delVtxBtn.id = 'hgis-del-vertex-btn';
-          delVtxBtn.type = 'button';
-          delVtxBtn.title = 'Supprimer le sommet sélectionné';
-          delVtxBtn.setAttribute('aria-label', 'Supprimer le sommet sélectionné');
-          delVtxBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
-          delVtxBtn.style.cssText = 'background-image:none; background-color:transparent;';
-          delVtxBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="display:block;margin:auto;"><circle cx="12" cy="12" r="3"/><path d="M8 12h8"/></svg>`;
-          delVtxBtn.onclick = (ev) => {
-            if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-            try {
-              const canvas = map.getCanvas();
-              canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', code: 'Delete', bubbles: true, cancelable: true }));
-            } catch (_) {}
-          };
-          children.appendChild(delVtxBtn);
-
           children.appendChild(multiBtn);
           children.appendChild(delBtn);
 
@@ -3854,6 +4021,10 @@
         for (const d of delays) setTimeout(tryInstall, d);
       }
       installSelectionControls();
+
+      try { installVertexLongPressDelete(); } catch (err) {
+        log.warn('[HydraulicGIS] vertex long-press install failed:', err);
+      }
 
       // ─── Per-feature style injection ─────────────────────────────────
       // terra-draw's `setModeStyles` accepts FUNCTIONS for style values
@@ -6727,6 +6898,10 @@
     }
 
     function resolveFlyWgs84() {
+      if (lastCoordFlyTarget && lastCoordFlyTarget.length >= 2
+          && isFinite(lastCoordFlyTarget[0]) && isFinite(lastCoordFlyTarget[1])) {
+        return lastCoordFlyTarget.slice();
+      }
       const resultEl = root.querySelector('#cc-result');
       if (ui._lastCoordConversion && resultEl && resultEl.style.display !== 'none') {
         const wgs = coordsToWgs84(ui._lastCoordConversion.out, ui._lastCoordConversion.to);
@@ -6796,6 +6971,7 @@
         const xy = c.id === 'wgs84' ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
         const fields = formatCoordFieldsForCrs(c.id, xy);
         ui._pendingPickResult = { a: fields.a, b: fields.b, fromCrs: fromSel.value };
+        lastCoordFlyTarget = [lng, lat];
         pickModeOff = null;
         cleanup();
         reopenSheet();
@@ -6817,6 +6993,7 @@
       fromSel.value = b; toSel.value = a;
       aIn.value = ''; bIn.value = '';
       ui._lastCoordConversion = null;
+      lastCoordFlyTarget = null;
       const resultEl = root.querySelector('#cc-result');
       if (resultEl) resultEl.style.display = 'none';
       updateLabels();
@@ -6869,6 +7046,10 @@
       if (!inp) { errEl.textContent = 'Coordonnées invalides — vérifiez le format.'; return; }
       const out = reproject(inp, fromSel.value, toSel.value);
       ui._lastCoordConversion = { from: fromSel.value, to: toSel.value, in: inp, out };
+      lastCoordFlyTarget = coordsToWgs84(out, toSel.value);
+      if (!lastCoordFlyTarget || !isFinite(lastCoordFlyTarget[0]) || !isFinite(lastCoordFlyTarget[1])) {
+        lastCoordFlyTarget = coordsToWgs84(inp, fromSel.value);
+      }
       coordHistory.unshift({ from: fromSel.value, to: toSel.value, in: inp, out, ts: Date.now() });
       coordHistory = coordHistory.slice(0, 20);
       showConvertResult(out, fromSel.value, toSel.value);
@@ -7476,12 +7657,12 @@
         id: 'app-grid-text', type: 'symbol', source: SRC_LBL,
         layout: {
           'text-field': ['get', 'label'],
-          'text-size': 10,
+          'text-size': ['interpolate', ['linear'], ['zoom'], 8, 9, 12, 10, 16, 12, 20, 14],
           'text-allow-overlap': true,
           'text-ignore-placement': true,
           'text-optional': false,
           'text-anchor': ['coalesce', ['get', 'anchor'], 'bottom-left'],
-          'text-offset': [0.15, 0.1],
+          'text-offset': [0.1, 0.05],
         },
         paint: {
           'text-color': '#aab4c2',
@@ -7512,16 +7693,55 @@
     const minLng = b.getWest(), maxLng = b.getEast();
     const minLat = b.getSouth(), maxLat = b.getNorth();
     const lines = [], labels = [];
-    const southmost = (coords) => {
-      let best = coords[0];
-      for (const p of coords) if (p[1] < best[1]) best = p;
-      return best;
-    };
-    const westmost = (coords) => {
-      let best = coords[0];
-      for (const p of coords) if (p[0] < best[0]) best = p;
-      return best;
-    };
+    const canvas = map.getCanvas();
+    const viewW = canvas.clientWidth;
+    const viewH = canvas.clientHeight;
+    const southMargin = 14;
+    const westMargin = 10;
+
+    function labelOnSouthEdge(lng, latHint) {
+      const px = map.project([lng, latHint != null ? latHint : (minLat + maxLat) / 2]);
+      const ll = map.unproject([
+        Math.max(0, Math.min(viewW, px.x)),
+        Math.max(0, viewH - southMargin),
+      ]);
+      return [lng, ll.lat];
+    }
+
+    function labelOnWestEdge(lngHint, lat) {
+      const px = map.project([lngHint != null ? lngHint : (minLng + maxLng) / 2, lat]);
+      const ll = map.unproject([
+        Math.max(0, westMargin),
+        Math.max(0, Math.min(viewH, px.y)),
+      ]);
+      return [ll.lng, lat];
+    }
+
+    function labelOnSouthFromSeg(seg) {
+      let best = seg[0];
+      let bestY = -Infinity;
+      for (const c of seg) {
+        const p = map.project(c);
+        if (p.x < -40 || p.x > viewW + 40) continue;
+        if (p.y > bestY) { bestY = p.y; best = c; }
+      }
+      const px = map.project(best);
+      const ll = map.unproject([Math.max(0, Math.min(viewW, px.x)), Math.max(0, viewH - southMargin)]);
+      return [ll.lng, ll.lat];
+    }
+
+    function labelOnWestFromSeg(seg) {
+      let best = seg[0];
+      let bestX = Infinity;
+      for (const c of seg) {
+        const p = map.project(c);
+        if (p.y < -40 || p.y > viewH + 40) continue;
+        if (p.x < bestX) { bestX = p.x; best = c; }
+      }
+      const px = map.project(best);
+      const ll = map.unproject([Math.max(0, westMargin), Math.max(0, Math.min(viewH, px.y))]);
+      return [ll.lng, ll.lat];
+    }
 
     if (gridState.crs === 'wgs84') {
       // Spacing in degrees
@@ -7547,7 +7767,7 @@
         labels.push({
           type: 'Feature',
           properties: { label: gridLabelDeg(xc, 'lon'), anchor: 'top' },
-          geometry: { type: 'Point', coordinates: [xc, minLat] },
+          geometry: { type: 'Point', coordinates: labelOnSouthEdge(xc, minLat) },
         });
       }
       // Horizontal lines (constant lat)
@@ -7556,8 +7776,8 @@
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[minLng, yc], [maxLng, yc]] } });
         labels.push({
           type: 'Feature',
-          properties: { label: gridLabelDeg(yc, 'lat'), anchor: 'right' },
-          geometry: { type: 'Point', coordinates: [minLng, yc] },
+          properties: { label: gridLabelDeg(yc, 'lat'), anchor: 'left' },
+          geometry: { type: 'Point', coordinates: labelOnWestEdge(minLng, yc) },
         });
       }
     } else {
@@ -7600,7 +7820,7 @@
         labels.push({
           type: 'Feature',
           properties: { label: 'X ' + gridLabelMeters(x), anchor: 'top' },
-          geometry: { type: 'Point', coordinates: southmost(seg) },
+          geometry: { type: 'Point', coordinates: labelOnSouthFromSeg(seg) },
         });
       }
       for (let y = y0; y <= y1 + 1; y += dx) {
@@ -7613,8 +7833,8 @@
         lines.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: seg } });
         labels.push({
           type: 'Feature',
-          properties: { label: 'Y ' + gridLabelMeters(y), anchor: 'right' },
-          geometry: { type: 'Point', coordinates: westmost(seg) },
+          properties: { label: 'Y ' + gridLabelMeters(y), anchor: 'left' },
+          geometry: { type: 'Point', coordinates: labelOnWestFromSeg(seg) },
         });
       }
     }
