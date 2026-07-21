@@ -335,14 +335,18 @@
       color: var(--brand);
     }
     /* Push the MapLibre top-right ctrl (geolocate) below #view-controls
-       (basemap picker + zoom extents). */
+       (basemap picker + north arrow + zoom extents). */
     .maplibregl-ctrl-top-right .maplibregl-ctrl-group:first-child {
-      margin-top: 88px !important;
+      margin-top: 124px !important;
     }
     @media (max-width: 1024px) {
       .maplibregl-ctrl-top-right .maplibregl-ctrl-group:first-child {
-        margin-top: 104px !important;
+        margin-top: 148px !important;
       }
+    }
+    #vc-north-arrow .north-needle {
+      transform-origin: 50% 50%;
+      transition: transform 80ms linear;
     }
 
     /* Status bar (desktop bottom-right cursor coords) */
@@ -967,7 +971,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-15·ae (coords+grid+vertex)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-21·af (points+north)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1101,6 +1105,14 @@
             </button>
           </div>
         </div>
+        <button class="basemap-btn" id="vc-north-arrow" title="Nord (réinitialiser l'orientation)" aria-label="Flèche du nord">
+          <svg class="north-needle" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3l4.5 16.5L12 16l-4.5 3.5L12 3z" fill="currentColor" opacity="0.95"/>
+            <path d="M12 3l4.5 16.5L12 16V3z" fill="#e74c3c"/>
+            <circle cx="12" cy="15.2" r="1.4" fill="var(--bg-2)" stroke="currentColor" stroke-width="1"/>
+            <text x="12" y="10.2" text-anchor="middle" font-size="6.5" font-weight="700" fill="#fff">N</text>
+          </svg>
+        </button>
         <button class="basemap-btn" id="vc-zoom-extents" title="Zoom étendu (sur les objets)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3h6M3 3v6M21 3h-6M21 3v6M3 21h6M3 21v-6M21 21h-6M21 21v-6"/>
@@ -1449,14 +1461,25 @@
     return formatWgsPairCopy(lng, lat, decimals);
   }
 
+  // Terra IDs we intentionally removed from terra-draw (points render on
+  // app-derived-point). Ignore matching change/delete events so the store
+  // row is not wiped right after creation.
+  const detachedTerraIds = new Set();
+
   function detachPointFromTerraDraw(f) {
     if (!f || f.kind !== 'point') return;
     const tid = f.geojson && f.geojson.properties && f.geojson.properties._terraId;
     if (!tid || !drawControl) return;
+    // Clear _terraId BEFORE removeFeatures so the change/delete handler
+    // cannot match this store row and delete the point we just created.
+    try { detachedTerraIds.add(String(tid)); } catch (_) {}
+    try { delete f.geojson.properties._terraId; } catch (_) {}
     try {
       const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
       if (td && typeof td.removeFeatures === 'function') td.removeFeatures([tid]);
     } catch (_) {}
+    // Keep the ban for a short window in case delete events arrive late.
+    setTimeout(() => { try { detachedTerraIds.delete(String(tid)); } catch (_) {} }, 2000);
   }
 
   function reproject([x, y], from, to) {
@@ -4200,10 +4223,11 @@
               source: FIRST_VTX_SRC,
               type: 'circle',
               paint: {
-                'circle-radius': 7,
+                'circle-radius': 9,
                 'circle-color': '#3f97e0',
                 'circle-stroke-color': '#ffffff',
-                'circle-stroke-width': 2
+                'circle-stroke-width': 2.5,
+                'circle-opacity': 1,
               }
             });
           }
@@ -4304,6 +4328,14 @@
           );
           const snap = td2.getSnapshot ? td2.getSnapshot() : [];
           const preview = [];
+          const pushVertex = (coord) => {
+            if (!coord || coord.length < 2) return;
+            preview.push({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [coord[0], coord[1]] },
+              properties: {},
+            });
+          };
           for (const f of snap) {
             if (!f || !f.geometry) continue;
             if (storeIds.has(String(f.id))) continue;
@@ -4312,6 +4344,18 @@
               geometry: f.geometry,
               properties: {},
             });
+            // Always mirror vertices as points so the first tap is visible
+            // even when the line/polygon geometry is still degenerate.
+            const g = f.geometry;
+            if (g.type === 'Point') {
+              pushVertex(g.coordinates);
+            } else if (g.type === 'LineString' && Array.isArray(g.coordinates)) {
+              g.coordinates.forEach(pushVertex);
+            } else if (g.type === 'Polygon' && g.coordinates && g.coordinates[0]) {
+              const ring = g.coordinates[0];
+              const n = Math.max(0, ring.length - 1); // skip closing duplicate
+              for (let i = 0; i < n; i++) pushVertex(ring[i]);
+            }
           }
           ensureDrawPreviewLayers();
           map.getSource(DRAW_PREVIEW_SRC).setData({
@@ -4350,40 +4394,45 @@
       // is in progress).
       function detectFirstVertexCoord(snapshot) {
         if (!snapshot || !snapshot.length) return null;
+        const nearEq = (a, b) => !!(a && b
+          && Math.abs(a[0] - b[0]) < 1e-9
+          && Math.abs(a[1] - b[1]) < 1e-9);
         for (const f of snapshot) {
           if (!f || !f.geometry || !f.properties) continue;
+          // Skip features already committed to our store.
+          if (f.id != null && state.features.some(sf =>
+            sf.geojson && sf.geojson.properties
+            && terraIdMatch(sf.geojson.properties._terraId, f.id))) continue;
           const mode = f.properties.mode;
           const g = f.geometry;
-          // Linestring degenerate: 2 coords, both identical
+          // Point mode: show the placed point immediately while finish runs.
+          if ((mode === 'point' || g.type === 'Point') && g.type === 'Point'
+              && g.coordinates && g.coordinates.length >= 2) {
+            return g.coordinates.slice(0, 2);
+          }
+          // Linestring degenerate: 2 coords, both identical (or nearly)
           if (mode === 'linestring' && g.type === 'LineString'
               && g.coordinates && g.coordinates.length === 2) {
             const a = g.coordinates[0], b = g.coordinates[1];
-            if (a && b && a[0] === b[0] && a[1] === b[1]) return a;
+            if (nearEq(a, b)) return a.slice();
           }
-          // Polygon degenerate: ring of 4 coords all identical
-          if (mode === 'polygon' && g.type === 'Polygon'
+          // Also show first vertex while a short/in-progress line has only
+          // one unique coordinate (some builds keep length > 2 with duplicates).
+          if (mode === 'linestring' && g.type === 'LineString'
+              && g.coordinates && g.coordinates.length >= 2) {
+            const a = g.coordinates[0];
+            const hasDistinct = g.coordinates.some(p => !nearEq(p, a));
+            if (!hasDistinct && a) return a.slice();
+          }
+          // Polygon / rectangle degenerate: ring of identical coords
+          if ((mode === 'polygon' || mode === 'rectangle') && g.type === 'Polygon'
               && g.coordinates && g.coordinates[0]
-              && g.coordinates[0].length === 4) {
+              && g.coordinates[0].length >= 3) {
             const ring = g.coordinates[0];
             const a = ring[0];
-            if (a && ring.every(p => p && p[0] === a[0] && p[1] === a[1])) {
-              return a;
-            }
+            if (a && ring.every(p => nearEq(p, a))) return a.slice();
           }
-          // Rectangle degenerate: same as polygon — ring of 4 identical coords
-          if (mode === 'rectangle' && g.type === 'Polygon'
-              && g.coordinates && g.coordinates[0]
-              && g.coordinates[0].length === 4) {
-            const ring = g.coordinates[0];
-            const a = ring[0];
-            if (a && ring.every(p => p && p[0] === a[0] && p[1] === a[1])) {
-              return a;
-            }
-          }
-          // Circle: terra-draw creates a circle of radius startingRadius
-          // (default 1e-5 km = 1 cm) at the first tap, which is invisible at
-          // any practical zoom. We detect it by checking that the polygon
-          // bounding box is essentially zero in degrees of arc (< 1e-5).
+          // Circle: tiny seed circle at first tap
           if (mode === 'circle' && g.type === 'Polygon'
               && g.coordinates && g.coordinates[0]
               && g.coordinates[0].length > 2) {
@@ -4394,8 +4443,6 @@
               if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
               if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
             }
-            // A circle smaller than ~1 metre across is the degenerate starting
-            // circle, not a user-sized one. (~1e-5 deg ≈ 1.1 m at the equator.)
             if (maxX - minX < 1e-4 && maxY - minY < 1e-4) {
               return [(minX + maxX) / 2, (minY + maxY) / 2];
             }
@@ -4449,6 +4496,9 @@
           log.warn('[HydraulicGIS] synthetic onMouseMove failed (private API):', err);
         }
       }
+
+      const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+
       // Use map.on('click', ...) — fires AFTER MapLibre internal handling but
       // BEFORE the user actually sees the result, and we can call onMouseMove
       // synchronously before terra-draw's click handler runs through its own
@@ -4460,13 +4510,34 @@
         try {
           if (!ev.isPrimary) return;
           const mode = td && td.getMode && td.getMode();
-          if (mode !== 'rectangle' && mode !== 'circle') return;
-          if (!isDrawInProgress(mode)) return;  // 1st tap → let terra-draw create
-          // 2nd tap during rectangle/circle: inject the missing pointermove.
           const rect = mapCanvas.getBoundingClientRect();
           const cx = ev.clientX - rect.left;
           const cy = ev.clientY - rect.top;
           const lngLat = map.unproject([cx, cy]);
+          // Immediate first-tap feedback for all draw modes (mobile has no
+          // hover, and terra-draw's degenerate geometry is invisible).
+          const drawModes = ['point', 'linestring', 'polygon', 'rectangle', 'circle'];
+          if (drawModes.includes(mode) && !isDrawInProgress(mode)) {
+            setFirstVertex([lngLat.lng, lngLat.lat]);
+            try {
+              ensureDrawPreviewLayers();
+              const src = map.getSource(DRAW_PREVIEW_SRC);
+              if (src) {
+                src.setData({
+                  type: 'FeatureCollection',
+                  features: [{
+                    type: 'Feature',
+                    geometry: { type: 'Point', coordinates: [lngLat.lng, lngLat.lat] },
+                    properties: {},
+                  }],
+                });
+                raiseDrawPreviewLayers();
+              }
+            } catch (_) {}
+          }
+          if (mode !== 'rectangle' && mode !== 'circle') return;
+          if (!isDrawInProgress(mode)) return;  // 1st tap → let terra-draw create
+          // 2nd tap during rectangle/circle: inject the missing pointermove.
           injectSyntheticMouseMove(lngLat, { x: cx, y: cy });
         } catch (_) {}
       }, true);  // capture phase — runs BEFORE terra-draw's own listener
@@ -4475,7 +4546,6 @@
         try { syncDrawPreview(); } catch (_) {}
       });
 
-      const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
       if (td && typeof td.on === 'function') {
 
         td.on('change', (ids, type) => {
@@ -4573,6 +4643,9 @@
           if (kind === 'point') {
             detachPointFromTerraDraw(newF);
             try { syncDerivedLayer(); } catch (_) {}
+            // Extra frames: ensure the circle is painted after detach + style settle.
+            requestAnimationFrame(() => { try { syncDerivedLayer(); map.triggerRepaint(); } catch (_) {} });
+            setTimeout(() => { try { syncDerivedLayer(); map.triggerRepaint(); } catch (_) {} }, 50);
           }
           const tidKey = (terraId == null) ? String(newF.id) : String(terraId);
           if (!_promptedTerraIdsFallback.has(tidKey)) {
@@ -4675,6 +4748,7 @@
         // Fallback handlers (kept intentionally redundant for cross-device robustness).
         td.on('finish', (id, ctx) => {
           clearDrawPreview();
+          clearFirstVertex();
           try {
             const snap = td.getSnapshot ? td.getSnapshot() : [];
             const tf = findTdSnapshotFeatureFallback(snap, id);
@@ -4719,7 +4793,12 @@
         td.on('change', (ids, type) => {
           try {
             if (type === 'delete') {
-              const banTerraIds = new Set((ids || []).map(String));
+              const banTerraIds = new Set(
+                (ids || [])
+                  .map(String)
+                  .filter(id => !detachedTerraIds.has(id))
+              );
+              if (!banTerraIds.size) return;
               const toRemove = state.features
                 .filter(f => f.geojson && f.geojson.properties && banTerraIds.has(String(f.geojson.properties._terraId)))
                 .map(f => f.id);
@@ -8092,7 +8171,25 @@
   document.querySelectorAll('.rail-btn').forEach(btn => {
     btn.addEventListener('click', () => ui.setPanel(btn.dataset.panel));
   });
-  // ═══ View controls — zoom-to-features ══════════════════════════════════════
+  // ═══ View controls — north arrow + zoom-to-features ═══════════════════════
+  (function installNorthArrow() {
+    const btn = document.getElementById('vc-north-arrow');
+    if (!btn) return;
+    const needle = btn.querySelector('.north-needle');
+    const syncNeedle = () => {
+      if (!needle) return;
+      const bearing = map.getBearing();
+      needle.style.transform = `rotate(${-bearing}deg)`;
+    };
+    map.on('rotate', syncNeedle);
+    map.on('pitch', syncNeedle);
+    map.on('move', syncNeedle);
+    syncNeedle();
+    btn.addEventListener('click', () => {
+      map.easeTo({ bearing: 0, pitch: 0, duration: 400 });
+    });
+  })();
+
   // "Zoom étendu" (Zoom Extents): center the map on the bounding box of
   // all current features, like the AutoCAD command. Useful after the user
   // has drawn a few objects and panned away. Falls back to the default

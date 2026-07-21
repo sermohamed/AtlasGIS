@@ -146,7 +146,14 @@
 
     td.on('change', function (ids, type) {
       if (type === 'delete') {
-        var banTerraIds = new Set((ids || []).map(String));
+        var banTerraIds = new Set((ids || []).map(String).filter(function (id) {
+          // Points are intentionally detached from terra-draw; ignore those deletes.
+          var stillInStore = (config.state.features || []).some(function (f) {
+            return f.geojson && f.geojson.properties &&
+              String(f.geojson.properties._terraId) === id;
+          });
+          return stillInStore;
+        }));
         var toRemove = (config.state.features || [])
           .filter(function (f) {
             return f.geojson && f.geojson.properties &&
