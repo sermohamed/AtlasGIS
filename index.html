@@ -971,7 +971,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-21·af (points+north)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-23·ag (labels+export+vertex)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -2004,7 +2004,8 @@
         labelHandleMarkers.delete(hid);
       }
     }
-    // Immediately flush labels so deleted objects cannot leave ghost names.
+    // Immediate hard wipe, then rebuild from remaining features only.
+    try { purgeAllLabelOverlays(); } catch (_) {}
     try { applyLabelFeatures(buildLabelFeatures()); } catch (_) {}
     // Prune elevation labels and derived overlays tied to deleted features.
     try { syncContourLabelsFromStore(); } catch (_) {}
@@ -2028,6 +2029,15 @@
     try { if (typeof syncDerivedLayer === 'function') syncDerivedLayer(); } catch (_) {}
     try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
     try { syncLabelHandles(); } catch (_) {}
+    // Late flush: some MapLibre mobile builds repaint symbols one frame late.
+    setTimeout(() => {
+      try { purgeAllLabelOverlays(); } catch (_) {}
+      try { applyLabelFeatures(buildLabelFeatures()); } catch (_) {}
+      try { syncLabelHandles(); } catch (_) {}
+    }, 40);
+    setTimeout(() => {
+      try { applyLabelFeatures(buildLabelFeatures()); } catch (_) {}
+    }, 160);
   }
 
   function clearAllFeatures() {
@@ -2071,6 +2081,7 @@
     } catch (err) { log.warn('[HydraulicGIS] removeFeatures failed:', err); }
 
     // 3) Empty every app-owned source so no overlay can linger as a ghost.
+    try { purgeAllLabelOverlays(); } catch (_) {}
     for (const srcId of [SRC_LABELS, 'app-selection', 'app-derived', 'app-contour-labels', 'app-contours']) {
       try { const s = map.getSource(srcId); if (s) s.setData({ type: 'FeatureCollection', features: [] }); } catch (_) {}
     }
@@ -2599,7 +2610,9 @@
     if (map.getSource('app-selection')) { try { map.removeSource('app-selection'); } catch (_) {} }
 
     const empty = { type: 'FeatureCollection', features: [] };
-    map.addSource(SRC_LABELS, { type: 'geojson', data: empty, promoteId: 'id' });
+    // Do NOT use promoteId here — MapLibre can leave ghost symbols after
+    // feature removal when promoteId is set (stale feature-id index).
+    map.addSource(SRC_LABELS, { type: 'geojson', data: empty });
     // Selection highlight source: holds the geometries of every feature in
     // state.selectedIds. Used so the user can see ALL selected items
     // simultaneously when in multi-select mode (terra-draw's own select
@@ -2858,24 +2871,49 @@
 
   function applyLabelFeatures(labelFeatures) {
     if (!map.isStyleLoaded()) return false;
-    if (!map.getSource(SRC_LABELS)) {
+    if (!map.getSource(SRC_LABELS) || !map.getLayer('app-label')) {
       try { installAppLayers(); } catch (_) { return false; }
     }
     try {
       const src = map.getSource(SRC_LABELS);
-      const fc = { type: 'FeatureCollection', features: labelFeatures || [] };
-      // Hard reset prevents ghost labels after delete on mobile MapLibre builds.
+      if (!src) return false;
+      const list = labelFeatures || [];
+      // Double-empty + next-frame rewrite: kills MapLibre symbol ghosts on
+      // mobile after delete (especially when feature ids are reused).
       src.setData({ type: 'FeatureCollection', features: [] });
-      src.setData(fc);
+      src.setData({ type: 'FeatureCollection', features: list });
       if (map.getLayer('app-label')) {
         try { map.moveLayer('app-label'); } catch (_) {}
       }
       map.triggerRepaint();
+      requestAnimationFrame(() => {
+        try {
+          const s2 = map.getSource(SRC_LABELS);
+          if (!s2) return;
+          s2.setData({ type: 'FeatureCollection', features: [] });
+          s2.setData({ type: 'FeatureCollection', features: buildLabelFeatures() });
+          map.triggerRepaint();
+        } catch (_) {}
+      });
       return true;
     } catch (err) {
       log.warn('[HydraulicGIS] applyLabelFeatures failed:', err);
       return false;
     }
+  }
+
+  /** Hard wipe of every label overlay (symbol layer + yellow drag handles). */
+  function purgeAllLabelOverlays() {
+    clearLabelHandleMarkers();
+    try {
+      const hs = map.getSource('app-label-handles');
+      if (hs) hs.setData({ type: 'FeatureCollection', features: [] });
+    } catch (_) {}
+    try {
+      const src = map.getSource(SRC_LABELS);
+      if (src) src.setData({ type: 'FeatureCollection', features: [] });
+    } catch (_) {}
+    try { map.triggerRepaint(); } catch (_) {}
   }
 
   /* ─── Label drag (edit mode) ─────────────────────────────────────────── */
@@ -3012,7 +3050,7 @@
     clearLabelHandleMarkers();
   }
 
-  /* ─── Vertex long-press delete (edit mode) ───────────────────────────── */
+  /* ─── Vertex long-press add/delete (edit mode) ───────────────────────── */
   const VERTEX_LONG_PRESS_MS = 2500;
   const VERTEX_HIT_PX = 18;
   const VERTEX_MOVE_CANCEL_PX = 12;
@@ -3035,6 +3073,19 @@
     return f;
   }
 
+  function clearVertexHoldMarker() {
+    if (_vtxHoldMarker) {
+      try { _vtxHoldMarker.remove(); } catch (_) {}
+      _vtxHoldMarker = null;
+    }
+  }
+
+  function cancelVertexLongPress() {
+    if (_vtxPress && _vtxPress.timer) clearTimeout(_vtxPress.timer);
+    _vtxPress = null;
+    clearVertexHoldMarker();
+  }
+
   function findVertexHitAtPixel(point) {
     const f = getSelectedEditableFeature();
     if (!f) return null;
@@ -3050,6 +3101,7 @@
       if (d <= bestD) {
         bestD = d;
         best = {
+          kind: 'vertex',
           terraId: f.geojson.properties._terraId,
           featureId: f.id,
           index: i,
@@ -3061,23 +3113,92 @@
     return best;
   }
 
-  function clearVertexHoldMarker() {
-    if (_vtxHoldMarker) {
-      try { _vtxHoldMarker.remove(); } catch (_) {}
-      _vtxHoldMarker = null;
+  function findEdgeHitAtPixel(point) {
+    const f = getSelectedEditableFeature();
+    if (!f) return null;
+    const g = f.geojson.geometry;
+    const ring = g.type === 'Polygon' ? g.coordinates[0] : g.coordinates;
+    if (!ring || ring.length < 2) return null;
+    const isPoly = g.type === 'Polygon';
+    const segCount = isPoly ? Math.max(0, ring.length - 1) : ring.length - 1;
+    let best = null;
+    let bestD = VERTEX_HIT_PX + 4;
+    for (let i = 0; i < segCount; i++) {
+      const a = map.project(ring[i]);
+      const b = map.project(ring[i + 1]);
+      const vx = b.x - a.x, vy = b.y - a.y;
+      const wx = point.x - a.x, wy = point.y - a.y;
+      const len2 = vx * vx + vy * vy;
+      let t = len2 > 0 ? (wx * vx + wy * vy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      // Prefer mid-segment presses (avoid mistaking a vertex for an edge).
+      if (t < 0.12 || t > 0.88) continue;
+      const cx = a.x + t * vx, cy = a.y + t * vy;
+      const d = Math.hypot(point.x - cx, point.y - cy);
+      if (d <= bestD) {
+        bestD = d;
+        const ll = map.unproject([cx, cy]);
+        best = {
+          kind: 'edge',
+          terraId: f.geojson.properties._terraId,
+          featureId: f.id,
+          insertIndex: i + 1,
+          geomType: g.type,
+          coord: [ll.lng, ll.lat],
+        };
+      }
+    }
+    return best;
+  }
+
+  function refreshTerraEditSelection(terraId) {
+    try {
+      const td = drawControl?.getTerraDrawInstance?.();
+      if (!td || terraId == null) return;
+      setSelectEditFlags(td, true);
+      try { if (typeof td.deselect === 'function') td.deselect(); } catch (_) {}
+      td.setMode('select');
+      try { td.selectFeature(terraId); } catch (_) {}
+      setTimeout(() => {
+        try {
+          setSelectEditFlags(td, true);
+          td.setMode('select');
+          td.selectFeature(terraId);
+        } catch (_) {}
+      }, 30);
+    } catch (_) {}
+  }
+
+  function applyEditedGeometry(featureId, terraId, geom) {
+    try {
+      const td = drawControl?.getTerraDrawInstance?.();
+      if (!td || !td._store || typeof td._store.updateGeometry !== 'function') return false;
+      td._store.updateGeometry([{ id: terraId, geometry: geom }]);
+      const ours = state.features.find(x => x.id === featureId);
+      if (ours) {
+        ours.geojson.geometry = geom;
+        // Manual label anchors stay; auto labels recompute from geometry.
+        ours.metrics = computeMetrics(ours.geojson, ours.kind);
+        ours.updatedAt = Date.now();
+      }
+      notifyFeatures();
+      refreshTerraEditSelection(terraId);
+      try { syncSelectionHighlight(); } catch (_) {}
+      try { syncLabelHandles(); } catch (_) {}
+      try { applyLabelFeatures(buildLabelFeatures()); } catch (_) {}
+      try { map.triggerRepaint(); } catch (_) {}
+      return true;
+    } catch (err) {
+      log.warn('[HydraulicGIS] applyEditedGeometry failed:', err);
+      return false;
     }
   }
 
-  function cancelVertexLongPress() {
-    if (_vtxPress && _vtxPress.timer) clearTimeout(_vtxPress.timer);
-    _vtxPress = null;
-    clearVertexHoldMarker();
-  }
-
   function deleteFeatureVertex(hit) {
-    const td = drawControl?.getTerraDrawInstance?.();
-    if (!td || !hit || !td._store || typeof td._store.updateGeometry !== 'function') return false;
-    const snap = td.getSnapshot ? td.getSnapshot() : [];
+    if (!hit || hit.kind === 'edge') return false;
+    const snapTd = drawControl?.getTerraDrawInstance?.();
+    if (!snapTd) return false;
+    const snap = snapTd.getSnapshot ? snapTd.getSnapshot() : [];
     const tf = snap.find(x => String(x.id) === String(hit.terraId));
     if (!tf || !tf.geometry) return false;
     const geom = JSON.parse(JSON.stringify(tf.geometry));
@@ -3094,33 +3215,31 @@
       }
     } else if (geom.type === 'LineString') {
       const coords = geom.coordinates;
-      if (coords.length <= 3) return false;
+      if (coords.length <= 2) return false;
       coords.splice(hit.index, 1);
     } else {
       return false;
     }
-    try {
-      td._store.updateGeometry([{ id: hit.terraId, geometry: geom }]);
-      const ours = state.features.find(x => x.id === hit.featureId);
-      if (ours) {
-        ours.geojson.geometry = geom;
-        ours.metrics = computeMetrics(ours.geojson, ours.kind);
-        ours.updatedAt = Date.now();
-      }
-      notifyFeatures();
-      try {
-        td.setMode('select');
-        setSelectEditFlags(td, true);
-        td.selectFeature(hit.terraId);
-      } catch (_) {}
-      try { syncSelectionHighlight(); } catch (_) {}
-      try { syncLabelHandles(); } catch (_) {}
-      try { map.triggerRepaint(); } catch (_) {}
-      return true;
-    } catch (err) {
-      log.warn('[HydraulicGIS] deleteFeatureVertex failed:', err);
+    return applyEditedGeometry(hit.featureId, hit.terraId, geom);
+  }
+
+  function insertFeatureVertex(hit) {
+    if (!hit || hit.kind !== 'edge') return false;
+    const snapTd = drawControl?.getTerraDrawInstance?.();
+    if (!snapTd) return false;
+    const snap = snapTd.getSnapshot ? snapTd.getSnapshot() : [];
+    const tf = snap.find(x => String(x.id) === String(hit.terraId));
+    if (!tf || !tf.geometry) return false;
+    const geom = JSON.parse(JSON.stringify(tf.geometry));
+    if (geom.type === 'Polygon') {
+      const ring = geom.coordinates[0];
+      ring.splice(hit.insertIndex, 0, hit.coord.slice());
+    } else if (geom.type === 'LineString') {
+      geom.coordinates.splice(hit.insertIndex, 0, hit.coord.slice());
+    } else {
       return false;
     }
+    return applyEditedGeometry(hit.featureId, hit.terraId, geom);
   }
 
   function installVertexLongPressDelete() {
@@ -3131,7 +3250,9 @@
     canvas.addEventListener('pointerdown', (ev) => {
       if (!ev.isPrimary || !isEditModeActive()) return;
       const point = canvasPointFromEvent(ev);
-      const hit = findVertexHitAtPixel(point);
+      const vtx = findVertexHitAtPixel(point);
+      const edge = vtx ? null : findEdgeHitAtPixel(point);
+      const hit = vtx || edge;
       if (!hit) return;
       cancelVertexLongPress();
       _vtxPress = {
@@ -3143,17 +3264,28 @@
           const pending = _vtxPress && _vtxPress.hit;
           cancelVertexLongPress();
           if (!pending || !isEditModeActive()) return;
-          ui.confirm(
-            'Supprimer ce sommet ?',
-            'Ce point sera retiré de l\'objet. Continuer ?',
-            () => { deleteFeatureVertex(pending); }
-          );
+          if (pending.kind === 'edge') {
+            ui.confirm(
+              'Ajouter un sommet ?',
+              'Un nouveau sommet sera inséré sur le segment à cet endroit.',
+              () => { insertFeatureVertex(pending); }
+            );
+          } else {
+            ui.confirm(
+              'Supprimer ce sommet ?',
+              'Ce point sera retiré de l\'objet. Continuer ?',
+              () => { deleteFeatureVertex(pending); }
+            );
+          }
         }, VERTEX_LONG_PRESS_MS),
       };
       try {
         clearVertexHoldMarker();
+        const isAdd = hit.kind === 'edge';
         const el = document.createElement('div');
-        el.style.cssText = 'width:22px;height:22px;border-radius:50%;border:2px solid #ff6b6b;background:rgba(255,107,107,0.25);box-shadow:0 0 0 2px rgba(0,0,0,0.35);';
+        el.style.cssText = isAdd
+          ? 'width:22px;height:22px;border-radius:50%;border:2px solid #3aa0ff;background:rgba(58,160,255,0.3);box-shadow:0 0 0 2px rgba(0,0,0,0.35);'
+          : 'width:22px;height:22px;border-radius:50%;border:2px solid #ff6b6b;background:rgba(255,107,107,0.25);box-shadow:0 0 0 2px rgba(0,0,0,0.35);';
         _vtxHoldMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
           .setLngLat(hit.coord)
           .addTo(map);
@@ -3903,7 +4035,7 @@
           const editBtn = document.createElement('button');
           editBtn.id = 'hgis-edit-btn';
           editBtn.type = 'button';
-          editBtn.title = 'Éditer (déplacer les sommets — maintenir 2,5 s sur un sommet pour supprimer)';
+          editBtn.title = 'Éditer : glisser sommets · appui long sur sommet = supprimer · appui long sur segment = ajouter';
           editBtn.setAttribute('aria-label', 'Éditer la sélection');
           editBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
           editBtn.style.cssText = 'background-image:none; background-color:transparent;';
@@ -7219,10 +7351,10 @@
           ${noneVisible
             ? ''
             : `<div class="export-grid">
-                <button class="export-btn" data-export="geojson">GeoJSON</button>
-                <button class="export-btn" data-export="kml">KML</button>
-                <button class="export-btn" data-export="csv">CSV<span class="hint">Points uniquement</span></button>
-                <button class="export-btn" data-export="txt">TXT<span class="hint">Rapport texte</span></button>
+                <button class="export-btn" data-export="geojson">GeoJSON<span class="hint">Géométrie complète</span></button>
+                <button class="export-btn" data-export="kml">KML<span class="hint">Géométrie complète</span></button>
+                <button class="export-btn" data-export="csv">CSV<span class="hint">Tous les sommets</span></button>
+                <button class="export-btn" data-export="txt">TXT<span class="hint">Liste des sommets</span></button>
               </div>`
           }
         </div>
@@ -8040,7 +8172,8 @@
     const fc = {
       type: 'FeatureCollection',
       features: features.map(f => ({
-        ...f.geojson,
+        type: 'Feature',
+        geometry: f.geojson.geometry,
         properties: {
           id: f.id, name: f.name, kind: f.kind,
           style: f.style, metrics: f.metrics,
@@ -8054,11 +8187,27 @@
       const kml = featuresToKML(fc);
       saveAs(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), 'projet.kml');
     } else if (format === 'csv') {
-      const rows = ['id,name,kind,latitude,longitude'];
+      const rows = ['id,name,kind,vertex,latitude,longitude,x_lambert,y_lambert'];
       for (const f of features) {
-        const c = pointCoord(f);
-        if (!c) continue;
-        rows.push([escapeCsv(f.id), escapeCsv(f.name), f.kind, c[1].toFixed(6), c[0].toFixed(6)].join(','));
+        const verts = featureVertices(f);
+        verts.forEach((c, i) => {
+          let xL = '', yL = '';
+          try {
+            const [x, y] = reproject([c[0], c[1]], 'wgs84', 'lambert-maroc-1');
+            xL = x.toFixed(3);
+            yL = y.toFixed(3);
+          } catch (_) {}
+          rows.push([
+            escapeCsv(f.id),
+            escapeCsv(f.name),
+            f.kind,
+            i + 1,
+            c[1].toFixed(8),
+            c[0].toFixed(8),
+            xL,
+            yL,
+          ].join(','));
+        });
       }
       saveAs(new Blob([rows.join('\n')], { type: 'text/csv' }), 'projet.csv');
     } else if (format === 'txt') {
@@ -8067,8 +8216,18 @@
         lines.push(`[${f.kind}] ${f.name}`);
         if (f.metrics.lengthMeters !== undefined) lines.push(`  Longueur : ${formatDistance(f.metrics.lengthMeters)}`);
         if (f.metrics.areaSquareMeters !== undefined) lines.push(`  Surface  : ${formatArea(f.metrics.areaSquareMeters)}`);
-        const c = pointCoord(f);
-        if (c) lines.push(`  Centre   : ${formatWgsPairDisplay(c[0], c[1], 6)}`);
+        const verts = featureVertices(f);
+        if (verts.length) {
+          lines.push(`  Sommets (${verts.length}) — lat, lon | X, Y Lambert :`);
+          verts.forEach((c, i) => {
+            let lambert = '';
+            try {
+              const [x, y] = reproject([c[0], c[1]], 'wgs84', 'lambert-maroc-1');
+              lambert = ` | ${formatProjected(x, 3)} ; ${formatProjected(y, 3)}`;
+            } catch (_) {}
+            lines.push(`    ${String(i + 1).padStart(3, ' ')}. ${formatWgsPairDisplay(c[0], c[1], 8)}${lambert}`);
+          });
+        }
         lines.push('');
       }
       saveAs(new Blob([lines.join('\n')], { type: 'text/plain' }), 'projet.txt');
@@ -8128,6 +8287,48 @@
       return [x / ring.length, y / ring.length];
     }
     return null;
+  }
+
+  /** All vertices of a feature as [lng, lat] (polygon closing point skipped). */
+  function featureVertices(f) {
+    const g = f && f.geojson && f.geojson.geometry;
+    if (!g) return [];
+    if (g.type === 'Point') return [g.coordinates.slice()];
+    if (g.type === 'LineString') {
+      return (g.coordinates || []).map(c => c.slice());
+    }
+    if (g.type === 'MultiLineString') {
+      const out = [];
+      for (const line of (g.coordinates || [])) {
+        for (const c of line) out.push(c.slice());
+      }
+      return out;
+    }
+    if (g.type === 'Polygon') {
+      const ring = (g.coordinates && g.coordinates[0]) || [];
+      if (ring.length < 2) return ring.map(c => c.slice());
+      // Skip duplicate closing coordinate.
+      const last = ring[ring.length - 1];
+      const first = ring[0];
+      const closed = first && last && first[0] === last[0] && first[1] === last[1];
+      return (closed ? ring.slice(0, -1) : ring).map(c => c.slice());
+    }
+    if (g.type === 'MultiPolygon') {
+      const out = [];
+      for (const poly of (g.coordinates || [])) {
+        const ring = poly[0] || [];
+        if (ring.length < 2) {
+          ring.forEach(c => out.push(c.slice()));
+          continue;
+        }
+        const last = ring[ring.length - 1];
+        const first = ring[0];
+        const closed = first && last && first[0] === last[0] && first[1] === last[1];
+        (closed ? ring.slice(0, -1) : ring).forEach(c => out.push(c.slice()));
+      }
+      return out;
+    }
+    return [];
   }
 
   function escapeCsv(s) {
