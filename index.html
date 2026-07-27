@@ -686,6 +686,23 @@
     }
     .label-drag-handle:active { cursor: grabbing; transform: scale(1.08); }
 
+    /* Long-press feedback while editing vertices: red = delete a vertex,
+       blue = insert one on the segment. The ring fills over --hold-ms. */
+    .vtx-hold-ring {
+      width: 30px; height: 30px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font: 700 15px/1 system-ui, sans-serif; color: #fff;
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.4);
+      animation: vtxHold var(--hold-ms, 600ms) linear forwards;
+      pointer-events: none;
+    }
+    .vtx-hold-ring.is-del { border: 2px solid #ff6b6b; background: rgba(255,107,107,0.35); }
+    .vtx-hold-ring.is-add { border: 2px solid #3aa0ff; background: rgba(58,160,255,0.35); }
+    @keyframes vtxHold {
+      from { transform: scale(0.55); opacity: 0.55; }
+      to   { transform: scale(1);    opacity: 1; }
+    }
+
     .empty-state {
       text-align: center;
       padding: 32px 16px;
@@ -971,7 +988,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-23·ag (labels+export+vertex)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-27·ah (edit+labels+contours)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1657,9 +1674,18 @@
       if (map.getLayer('app-selection-fill')) map.moveLayer('app-selection-fill');
       if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
       if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
+      raiseLabelLayers();
+    } catch (_) {}
+  }
+  // Labels and their leader lines must always sit on top of the terra-draw
+  // layers, which get (re)created at the top of the stack while drawing.
+  function raiseLabelLayers() {
+    try {
+      if (map.getLayer('app-label-leader')) map.moveLayer('app-label-leader');
       if (map.getLayer('app-label')) map.moveLayer('app-label');
     } catch (_) {}
   }
+
   function onFeatures(fn) { state.listeners.features.push(fn); }
   function onUi(fn) { state.listeners.ui.push(fn); }
 
@@ -1694,6 +1720,8 @@
         style,
         labelAnchor: (f.labelAnchor && Array.isArray(f.labelAnchor) && f.labelAnchor.length === 2)
           ? f.labelAnchor.slice() : null,
+        labelOffset: (f.labelOffset && isFinite(f.labelOffset.distM) && isFinite(f.labelOffset.bearing))
+          ? { distM: f.labelOffset.distM, bearing: f.labelOffset.bearing } : null,
         metrics: f.metrics || computeMetrics(geojson, kind),
         createdAt: f.createdAt || now,
         updatedAt: f.updatedAt || now,
@@ -1752,6 +1780,33 @@
     return !!(f && f.style && f.style.visible !== false);
   }
 
+  // terra-draw rejects any coordinate carrying more decimals than its
+  // configured coordinatePrecision (9 by default) with a plain
+  // "Feature has invalid coordinates" — and addFeatures reports it in the
+  // return value instead of throwing. Turf output routinely has 13+ decimals,
+  // so features were being dropped without a trace: they stayed in our store
+  // and rendered, but terra-draw never knew about them, which made select and
+  // vertex editing do nothing at all.
+  function terraCoordinatePrecision() {
+    try {
+      const td = drawControl?.getTerraDrawInstance?.();
+      for (const name of ['polygon', 'linestring', 'point']) {
+        const p = td && td._modes && td._modes[name] && td._modes[name].coordinatePrecision;
+        if (Number.isFinite(p)) return p;
+      }
+    } catch (_) {}
+    return 9;
+  }
+
+  function roundGeometryPrecision(geom, precision) {
+    const p = Number.isFinite(precision) ? precision : 9;
+    const walk = (v) => {
+      if (Array.isArray(v)) return v.map(walk);
+      return typeof v === 'number' ? Number(v.toFixed(p)) : v;
+    };
+    return { ...geom, coordinates: walk(geom.coordinates) };
+  }
+
   function pushFeatureToTerraDraw(f) {
     if (!f || !f.geojson || !f.geojson.geometry || isDerivedFeature(f)) return false;
     // Points render on app-derived-point (terra-draw td-point is unreliable on mobile).
@@ -1768,12 +1823,21 @@
       }
       const tdMode = ({ point: 'point', line: 'linestring', polygon: 'polygon',
                         rectangle: 'rectangle', circle: 'circle', freehand: 'freehand' })[f.kind] || 'polygon';
-      td.addFeatures([{
+      const geom = roundGeometryPrecision(f.geojson.geometry, terraCoordinatePrecision());
+      // Keep our copy identical to terra-draw's, otherwise the next edit
+      // round-trip reintroduces the rejected precision.
+      f.geojson.geometry = geom;
+      const res = td.addFeatures([{
         id: tid,
         type: 'Feature',
-        geometry: f.geojson.geometry,
+        geometry: geom,
         properties: { ...(f.geojson.properties || {}), mode: tdMode },
       }]);
+      const rejected = Array.isArray(res) ? res.filter(r => r && r.valid === false) : [];
+      if (rejected.length) {
+        log.warn('[HydraulicGIS] terra-draw rejected feature', f.id, rejected[0].reason);
+        return false;
+      }
       return true;
     } catch (err) {
       log.warn('[HydraulicGIS] pushFeatureToTerraDraw failed:', err);
@@ -1848,6 +1912,8 @@
       const allLabels = [];
       for (const f of state.features) {
         if (!f.geojson || !f.geojson.properties || f.geojson.properties._derivedKind !== 'contours') continue;
+        // Hiding the contour feature must hide its elevation labels too.
+        try { if (typeof isFeatureVisible === 'function' && !isFeatureVisible(f)) continue; } catch (_) {}
         const stored = f.geojson.properties._elevationLabels;
         if (!Array.isArray(stored)) continue;
         for (const lab of stored) {
@@ -2565,15 +2631,17 @@
     }
     if (enabled) {
       selMode.flags = JSON.parse(JSON.stringify(_originalSelectFlags));
-      // Guarantee vertex edit/delete flags (some builds store coordinates:false).
+      // Guarantee draggable vertices. Midpoints stay OFF: users confused the
+      // half-way handles with real vertices. Adding a vertex is done with a
+      // long press on the segment instead.
       for (const modeName of Object.keys(selMode.flags)) {
         const entry = selMode.flags[modeName];
         if (!entry || !entry.feature) continue;
         const c = entry.feature.coordinates;
         if (c === true || c == null) {
-          entry.feature.coordinates = { midpoints: true, draggable: true, deletable: true };
+          entry.feature.coordinates = { midpoints: false, draggable: true, deletable: true };
         } else if (typeof c === 'object') {
-          entry.feature.coordinates.midpoints = true;
+          entry.feature.coordinates.midpoints = false;
           entry.feature.coordinates.draggable = true;
           entry.feature.coordinates.deletable = true;
         }
@@ -2602,7 +2670,9 @@
         && map.getSource('app-selection') && map.getLayer('app-selection-line')) return;
 
     // Clean partial state.
-    if (map.getLayer('app-label')) { try { map.removeLayer('app-label'); } catch (_) {} }
+    for (const id of ['app-label', 'app-label-leader']) {
+      if (map.getLayer(id)) { try { map.removeLayer(id); } catch (_) {} }
+    }
     if (map.getSource(SRC_LABELS)) { try { map.removeSource(SRC_LABELS); } catch (_) {} }
     for (const id of ['app-selection-line', 'app-selection-fill', 'app-selection-point', 'app-selection-poly-fill']) {
       if (map.getLayer(id)) { try { map.removeLayer(id); } catch (_) {} }
@@ -2654,8 +2724,24 @@
     // rendered by terra-draw (td-point, td-linestring, td-polygon). This
     // keeps the mobile draw experience simple and bug-free: terra-draw is
     // the sole renderer and there's no double-buffering or filter dance.
+    // Leader line: when a label is dragged away from its object, this thin
+    // line keeps the two visually tied together (same source as the labels,
+    // so both always update in one setData).
+    map.addLayer({
+      id: 'app-label-leader', type: 'line', source: SRC_LABELS,
+      filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round' },
+      paint: {
+        'line-color': '#f7b955',
+        'line-width': 1.2,
+        'line-opacity': 0.85,
+        'line-dasharray': [2, 2],
+      },
+    });
+
     map.addLayer({
       id: 'app-label', type: 'symbol', source: SRC_LABELS,
+      filter: ['==', ['geometry-type'], 'Point'],
       layout: {
         'text-field': ['get', 'name'],
         // Use a map glyph stack that is actually available across basemaps.
@@ -2746,10 +2832,21 @@
     return best;
   }
 
-  function computeLabelAnchor(f, allFeatures) {
-    if (f.labelAnchor && Array.isArray(f.labelAnchor) && f.labelAnchor.length === 2) {
-      return f.labelAnchor.slice();
+  // A dragged label stores a *relative* offset (distance + bearing from the
+  // object's natural anchor), never an absolute position. That way the label
+  // follows the object when it is moved or reshaped, and the offset can be
+  // clamped so the label can never drift off on its own.
+  function labelMaxOffsetMeters(f) {
+    try {
+      const bb = turf.bbox(f.geojson);
+      const diag = turf.distance([bb[0], bb[1]], [bb[2], bb[3]], { units: 'meters' });
+      return Math.max(25, Math.min(diag * 0.9, 400));
+    } catch (_) {
+      return 120;
     }
+  }
+
+  function computeLabelBaseAnchor(f, allFeatures) {
     const g = f.geojson && f.geojson.geometry;
     if (!g) return null;
     const dk = f.geojson.properties && f.geojson.properties._derivedKind;
@@ -2797,6 +2894,35 @@
       return c ? c.slice() : null;
     }
     return null;
+  }
+
+  // Legacy states stored an absolute labelAnchor. Convert it once to a
+  // relative offset so those labels start following their object too.
+  function migrateLabelAnchor(f, base) {
+    if (!base || !f.labelAnchor || !Array.isArray(f.labelAnchor) || f.labelAnchor.length !== 2) return;
+    try {
+      const from = turf.point(base), to = turf.point(f.labelAnchor);
+      f.labelOffset = {
+        distM: turf.distance(from, to, { units: 'meters' }),
+        bearing: turf.bearing(from, to),
+      };
+    } catch (_) {}
+    delete f.labelAnchor;
+  }
+
+  function computeLabelAnchor(f, allFeatures) {
+    const base = computeLabelBaseAnchor(f, allFeatures);
+    if (!base) return null;
+    if (f.labelAnchor) migrateLabelAnchor(f, base);
+    const off = f.labelOffset;
+    if (!off || !(off.distM > 0.5)) return base;
+    const distM = Math.min(off.distM, labelMaxOffsetMeters(f));
+    try {
+      return turf.destination(turf.point(base), distM, off.bearing, { units: 'meters' })
+        .geometry.coordinates.slice();
+    } catch (_) {
+      return base;
+    }
   }
 
   function separateLabelAnchors(items, minMeters = 55) {
@@ -2849,24 +2975,43 @@
     for (const f of state.features) {
       if (!isFeatureVisible(f)) continue;
       if (f.style && f.style.showLabel === false) continue;
-      const manual = !!(f.labelAnchor && Array.isArray(f.labelAnchor) && f.labelAnchor.length === 2);
+      const base = computeLabelBaseAnchor(f, state.features);
+      if (f.labelAnchor) migrateLabelAnchor(f, base);
       const anchor = computeLabelAnchor(f, state.features);
-      if (!anchor) continue;
+      if (!anchor || !base) continue;
       candidates.push({
         id: f.id,
         priority: computeLabelPriority(f),
         anchor,
-        manual,
+        base,
+        manual: !!(f.labelOffset && f.labelOffset.distM > 0.5),
         name: (f.name && String(f.name).trim()) ? f.name : nameForKind(f.kind),
       });
     }
     separateLabelAnchors(candidates, 55);
-    return candidates.map(c => ({
-      type: 'Feature',
-      id: c.id,
-      geometry: { type: 'Point', coordinates: c.anchor },
-      properties: { id: c.id, name: c.name, priority: c.priority },
-    }));
+    const out = [];
+    for (const c of candidates) {
+      out.push({
+        type: 'Feature',
+        id: c.id,
+        geometry: { type: 'Point', coordinates: c.anchor },
+        properties: { id: c.id, name: c.name, priority: c.priority },
+      });
+      // Leader line only once the label sits visibly away from its object.
+      let away = 0;
+      try {
+        away = turf.distance(turf.point(c.base), turf.point(c.anchor), { units: 'meters' });
+      } catch (_) {}
+      if (away > 8) {
+        out.push({
+          type: 'Feature',
+          id: String(c.id) + ':leader',
+          geometry: { type: 'LineString', coordinates: [c.base, c.anchor] },
+          properties: { id: c.id, leader: true },
+        });
+      }
+    }
+    return out;
   }
 
   function applyLabelFeatures(labelFeatures) {
@@ -2882,9 +3027,7 @@
       // mobile after delete (especially when feature ids are reused).
       src.setData({ type: 'FeatureCollection', features: [] });
       src.setData({ type: 'FeatureCollection', features: list });
-      if (map.getLayer('app-label')) {
-        try { map.moveLayer('app-label'); } catch (_) {}
-      }
+      try { raiseLabelLayers(); } catch (_) {}
       map.triggerRepaint();
       requestAnimationFrame(() => {
         try {
@@ -2988,7 +3131,23 @@
     });
     marker.on('drag', () => {
       const ll = marker.getLngLat();
-      f.labelAnchor = [ll.lng, ll.lat];
+      const base = computeLabelBaseAnchor(f, state.features);
+      if (base) {
+        let distM = 0, bearing = 0;
+        try {
+          const from = turf.point(base), to = turf.point([ll.lng, ll.lat]);
+          distM = turf.distance(from, to, { units: 'meters' });
+          bearing = turf.bearing(from, to);
+        } catch (_) {}
+        const maxM = labelMaxOffsetMeters(f);
+        delete f.labelAnchor;
+        f.labelOffset = distM < 0.5 ? null : { distM: Math.min(distM, maxM), bearing };
+        // Leash: past the limit the handle snaps back instead of drifting off.
+        if (distM > maxM) {
+          const clamped = computeLabelAnchor(f, state.features);
+          if (clamped) marker.setLngLat(clamped);
+        }
+      }
       applyLabelFeatures(buildLabelFeatures());
     });
     marker.on('dragend', () => {
@@ -3051,9 +3210,11 @@
   }
 
   /* ─── Vertex long-press add/delete (edit mode) ───────────────────────── */
-  const VERTEX_LONG_PRESS_MS = 2500;
-  const VERTEX_HIT_PX = 18;
-  const VERTEX_MOVE_CANCEL_PX = 12;
+  // 600 ms is the platform-standard long-press. The previous 2.5 s made the
+  // gesture feel broken because terra-draw starts dragging the vertex first.
+  const VERTEX_LONG_PRESS_MS = 600;
+  const VERTEX_HIT_PX = 22;
+  const VERTEX_MOVE_CANCEL_PX = 14;
   let _vtxPress = null;
   let _vtxLongPressInstalled = false;
   let _vtxHoldMarker = null;
@@ -3086,11 +3247,27 @@
     clearVertexHoldMarker();
   }
 
+  // terra-draw owns the geometry while a feature is being edited: reading our
+  // store here would hit-test against stale coordinates right after a drag.
+  function liveEditGeometry(f) {
+    try {
+      const td = drawControl?.getTerraDrawInstance?.();
+      const tid = f?.geojson?.properties?._terraId;
+      if (td && tid != null && typeof td.getSnapshot === 'function') {
+        const tf = td.getSnapshot().find(x => String(x.id) === String(tid));
+        if (tf && tf.geometry) return tf.geometry;
+      }
+    } catch (_) {}
+    return f && f.geojson ? f.geojson.geometry : null;
+  }
+
   function findVertexHitAtPixel(point) {
     const f = getSelectedEditableFeature();
     if (!f) return null;
-    const g = f.geojson.geometry;
+    const g = liveEditGeometry(f);
+    if (!g || (g.type !== 'Polygon' && g.type !== 'LineString')) return null;
     const ring = g.type === 'Polygon' ? g.coordinates[0] : g.coordinates;
+    if (!ring || !ring.length) return null;
     const isPoly = g.type === 'Polygon';
     const count = isPoly ? Math.max(0, ring.length - 1) : ring.length;
     let best = null;
@@ -3116,7 +3293,8 @@
   function findEdgeHitAtPixel(point) {
     const f = getSelectedEditableFeature();
     if (!f) return null;
-    const g = f.geojson.geometry;
+    const g = liveEditGeometry(f);
+    if (!g || (g.type !== 'Polygon' && g.type !== 'LineString')) return null;
     const ring = g.type === 'Polygon' ? g.coordinates[0] : g.coordinates;
     if (!ring || ring.length < 2) return null;
     const isPoly = g.type === 'Polygon';
@@ -3131,9 +3309,10 @@
       const len2 = vx * vx + vy * vy;
       let t = len2 > 0 ? (wx * vx + wy * vy) / len2 : 0;
       t = Math.max(0, Math.min(1, t));
-      // Prefer mid-segment presses (avoid mistaking a vertex for an edge).
-      if (t < 0.12 || t > 0.88) continue;
       const cx = a.x + t * vx, cy = a.y + t * vy;
+      // Stay clear of the endpoints so a vertex is never read as an edge.
+      if (Math.hypot(cx - a.x, cy - a.y) < VERTEX_HIT_PX) continue;
+      if (Math.hypot(cx - b.x, cy - b.y) < VERTEX_HIT_PX) continue;
       const d = Math.hypot(point.x - cx, point.y - cy);
       if (d <= bestD) {
         bestD = d;
@@ -3171,15 +3350,27 @@
 
   function applyEditedGeometry(featureId, terraId, geom) {
     try {
-      const td = drawControl?.getTerraDrawInstance?.();
-      if (!td || !td._store || typeof td._store.updateGeometry !== 'function') return false;
-      td._store.updateGeometry([{ id: terraId, geometry: geom }]);
       const ours = state.features.find(x => x.id === featureId);
-      if (ours) {
-        ours.geojson.geometry = geom;
-        // Manual label anchors stay; auto labels recompute from geometry.
-        ours.metrics = computeMetrics(ours.geojson, ours.kind);
-        ours.updatedAt = Date.now();
+      if (!ours) return false;
+      const rounded = roundGeometryPrecision(geom, terraCoordinatePrecision());
+      // Our store is authoritative: write it first so the edit is never lost
+      // when terra-draw refuses the update.
+      ours.geojson.geometry = rounded;
+      ours.metrics = computeMetrics(ours.geojson, ours.kind);
+      ours.updatedAt = Date.now();
+
+      const td = drawControl?.getTerraDrawInstance?.();
+      const inTerraDraw = !!(td && typeof td.hasFeature === 'function'
+        ? td.hasFeature(terraId)
+        : td && td._store && td._store.has && td._store.has(terraId));
+      if (td && inTerraDraw && td._store && typeof td._store.updateGeometry === 'function') {
+        td._store.updateGeometry([{ id: terraId, geometry: rounded }]);
+      } else {
+        // Feature was never accepted by terra-draw (or was dropped): put it
+        // back so the vertex handles reappear after the edit.
+        try { if (td && typeof td.removeFeatures === 'function') td.removeFeatures([terraId]); } catch (_) {}
+        pushFeatureToTerraDraw(ours);
+        terraId = ours.geojson.properties._terraId;
       }
       notifyFeatures();
       refreshTerraEditSelection(terraId);
@@ -3194,14 +3385,18 @@
     }
   }
 
+  // Read the geometry the hit test was computed against, whether it lives in
+  // terra-draw or only in our store.
+  function editGeometryForHit(hit) {
+    const f = state.features.find(x => x.id === hit.featureId);
+    const g = f ? liveEditGeometry(f) : null;
+    return g ? JSON.parse(JSON.stringify(g)) : null;
+  }
+
   function deleteFeatureVertex(hit) {
     if (!hit || hit.kind === 'edge') return false;
-    const snapTd = drawControl?.getTerraDrawInstance?.();
-    if (!snapTd) return false;
-    const snap = snapTd.getSnapshot ? snapTd.getSnapshot() : [];
-    const tf = snap.find(x => String(x.id) === String(hit.terraId));
-    if (!tf || !tf.geometry) return false;
-    const geom = JSON.parse(JSON.stringify(tf.geometry));
+    const geom = editGeometryForHit(hit);
+    if (!geom) return false;
     if (geom.type === 'Polygon') {
       const ring = geom.coordinates[0];
       if (ring.length <= 4) return false;
@@ -3225,12 +3420,8 @@
 
   function insertFeatureVertex(hit) {
     if (!hit || hit.kind !== 'edge') return false;
-    const snapTd = drawControl?.getTerraDrawInstance?.();
-    if (!snapTd) return false;
-    const snap = snapTd.getSnapshot ? snapTd.getSnapshot() : [];
-    const tf = snap.find(x => String(x.id) === String(hit.terraId));
-    if (!tf || !tf.geometry) return false;
-    const geom = JSON.parse(JSON.stringify(tf.geometry));
+    const geom = editGeometryForHit(hit);
+    if (!geom) return false;
     if (geom.type === 'Polygon') {
       const ring = geom.coordinates[0];
       ring.splice(hit.insertIndex, 0, hit.coord.slice());
@@ -3264,6 +3455,7 @@
           const pending = _vtxPress && _vtxPress.hit;
           cancelVertexLongPress();
           if (!pending || !isEditModeActive()) return;
+          try { if (navigator.vibrate) navigator.vibrate(30); } catch (_) {}
           if (pending.kind === 'edge') {
             ui.confirm(
               'Ajouter un sommet ?',
@@ -3283,9 +3475,9 @@
         clearVertexHoldMarker();
         const isAdd = hit.kind === 'edge';
         const el = document.createElement('div');
-        el.style.cssText = isAdd
-          ? 'width:22px;height:22px;border-radius:50%;border:2px solid #3aa0ff;background:rgba(58,160,255,0.3);box-shadow:0 0 0 2px rgba(0,0,0,0.35);'
-          : 'width:22px;height:22px;border-radius:50%;border:2px solid #ff6b6b;background:rgba(255,107,107,0.25);box-shadow:0 0 0 2px rgba(0,0,0,0.35);';
+        el.className = 'vtx-hold-ring' + (isAdd ? ' is-add' : ' is-del');
+        el.style.setProperty('--hold-ms', VERTEX_LONG_PRESS_MS + 'ms');
+        el.innerHTML = isAdd ? '<span>+</span>' : '<span>−</span>';
         _vtxHoldMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
           .setLngLat(hit.coord)
           .addTo(map);
@@ -3360,7 +3552,7 @@
       if (map.getLayer('app-selection-fill')) map.moveLayer('app-selection-fill');
       if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
       if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
-      if (map.getLayer('app-label')) map.moveLayer('app-label');
+      raiseLabelLayers();
       raiseGridLayers();
     } catch (_) {}
 
@@ -4136,7 +4328,8 @@
           const refreshHalo = () => {
             try { if (typeof syncSelectionHighlight === 'function') syncSelectionHighlight(); } catch (_) {}
             try {
-              ['app-selection-fill', 'app-selection-line', 'app-selection-point', 'app-label']
+              ['app-selection-fill', 'app-selection-line', 'app-selection-point',
+               'app-label-leader', 'app-label']
                 .forEach(l => { if (map.getLayer(l)) map.moveLayer(l); });
             } catch (_) {}
             try { map.triggerRepaint(); } catch (_) {}
@@ -4436,7 +4629,7 @@
           for (const id of [DRAW_PREVIEW_FL, DRAW_PREVIEW_LN, DRAW_PREVIEW_PT, FIRST_VTX_LYR]) {
             if (map.getLayer(id)) map.moveLayer(id);
           }
-          if (map.getLayer('app-label')) map.moveLayer('app-label');
+          raiseLabelLayers();
         } catch (_) {}
       }
       function clearDrawPreview() {
@@ -4721,7 +4914,7 @@
             if (map.getLayer('app-selection-fill')) map.moveLayer('app-selection-fill');
             if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
             if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
-            if (map.getLayer('app-label')) map.moveLayer('app-label');
+            raiseLabelLayers();
           } catch (_) {}
           try { map.triggerRepaint(); } catch (_) {}
         };
@@ -5165,16 +5358,61 @@
     resetDrawUi();
 
     map.setStyle(BASEMAPS[id]);
-    map.once('idle', () => {
+    // setStyle wipes every custom source and layer. 'idle' and 'style.load'
+    // are unreliable here (raster basemaps can leave the map non-idle
+    // indefinitely, and style.load only fires for the initial style), which
+    // silently left the map with no overlays at all — drawings, labels,
+    // buffers and contours all vanished until a reload. 'styledata' always
+    // fires, so drive the rebuild from there.
+    onStyleReady(() => {
       map.setMaxZoom(isEsriRasterBasemap(id) ? SATELLITE_MAX_ZOOM : 19);
-      installAppLayers();
-      restorePersistedMapState();
-      updateGrid();
-      installDrawControl();
-      mountDrawDefaultsInToolbar();
+      reinstallMapOverlays();
     });
 
     updateBasemapUi();
+  }
+
+  // Run cb once the current style is usable. Retries on every styledata
+  // event and keeps a timer as a last resort.
+  function onStyleReady(cb) {
+    let done = false;
+    const run = () => {
+      if (done || !map.isStyleLoaded()) return;
+      done = true;
+      map.off('styledata', run);
+      try { cb(); } catch (e) { log.error('[HydraulicGIS] onStyleReady failed:', e); }
+    };
+    map.on('styledata', run);
+    const deadline = Date.now() + 15000;
+    const poll = () => {
+      if (done) return;
+      run();
+      if (!done && Date.now() < deadline) setTimeout(poll, 200);
+    };
+    setTimeout(poll, 50);
+  }
+
+  // Rebuild every app-owned source/layer plus terra-draw. Every step is
+  // idempotent so this is safe to call more than once.
+  function reinstallMapOverlays() {
+    const steps = [
+      installAppLayers,
+      ensureDerivedLayers,
+      ensureContourLabelsLayer,
+      installDrawControl,
+      mountDrawDefaultsInToolbar,
+      restorePersistedMapState,
+      syncDerivedLayer,
+      syncContourLabelsFromStore,
+      syncFeaturesToMap,
+      syncSelectionHighlight,
+      syncLabelHandles,
+      updateGrid,
+    ];
+    for (const step of steps) {
+      try { step(); } catch (e) { log.warn('[HydraulicGIS] reinstall step failed:', step.name, e); }
+    }
+    try { map.triggerRepaint(); } catch (_) {}
   }
 
   map.on('error', (e) => {
@@ -6076,8 +6314,11 @@
         <div class="surface">
           <div class="field-label" style="margin-bottom:6px;">Courbes de niveau</div>
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Échantillonne l'altitude (Open-Meteo, fallback Open-Elevation) sur le polygone sélectionné et trace les courbes de niveau.
-            <br><em style="color:var(--ink-2);">Nécessite Internet. Ne pas utiliser sur des polygones très étendus (limite ~30 km de côté).</em>
+            Échantillonne l'altitude (Open-Meteo, fallback Open-Elevation) sur le polygone sélectionné et trace les courbes de niveau,
+            avec l'altitude écrite le long de chaque courbe.
+            <br><em style="color:var(--ink-2);">Nécessite Internet. Ne pas utiliser sur des polygones très étendus (limite ~30 km de côté).
+            La densité d'échantillonnage s'adapte à la taille du polygone ; un écart résiduel avec les courbes du fond « Terrain » reste
+            normal car les deux sources utilisent des modèles de terrain différents.</em>
             ${polys.length === 1 ? '' : '<br><strong>Sélectionnez exactement 1 polygone, rectangle ou cercle.</strong>'}
           </p>
           <div style="display:flex; gap:8px; align-items:flex-end;">
@@ -6349,6 +6590,52 @@
       }
     });
 
+    // Marching squares emits unordered two-point segments. Join the ones
+    // that share an endpoint into continuous polylines so a contour reads as
+    // one curve (and can carry a label along it).
+    function chainSegments(segments) {
+      const KEY = (p) => p[0].toFixed(7) + ',' + p[1].toFixed(7);
+      const buckets = new Map();
+      const used = new Array(segments.length).fill(false);
+      segments.forEach((seg, i) => {
+        for (const p of seg) {
+          const k = KEY(p);
+          if (!buckets.has(k)) buckets.set(k, []);
+          buckets.get(k).push(i);
+        }
+      });
+      const takeNext = (key, skip) => {
+        const list = buckets.get(key);
+        if (!list) return -1;
+        for (const i of list) {
+          if (i !== skip && !used[i]) return i;
+        }
+        return -1;
+      };
+      const lines = [];
+      for (let s = 0; s < segments.length; s++) {
+        if (used[s]) continue;
+        used[s] = true;
+        const line = [segments[s][0].slice(), segments[s][1].slice()];
+        // Extend forward, then backward, until no neighbour is left.
+        for (const forward of [true, false]) {
+          let guard = 0;
+          while (guard++ < segments.length) {
+            const tip = forward ? line[line.length - 1] : line[0];
+            const next = takeNext(KEY(tip), -1);
+            if (next < 0) break;
+            used[next] = true;
+            const seg = segments[next];
+            const other = KEY(seg[0]) === KEY(tip) ? seg[1] : seg[0];
+            if (forward) line.push(other.slice());
+            else line.unshift(other.slice());
+          }
+        }
+        lines.push(line);
+      }
+      return lines;
+    }
+
     // Contour lines: sample elevations on a grid inside the bbox of the
     // selected polygon, then run a basic marching-squares to build polylines
     // at integer multiples of the user-given step. Network access required.
@@ -6382,9 +6669,14 @@
         return;
       }
 
-      // Grid resolution: 25×25 = 625 sample points. Open-Elevation accepts
-      // up to a few hundred per request; we batch into one POST.
-      const N = 25;
+      // Grid resolution drives how far a contour can sit from the real
+      // terrain: marching squares can only place a crossing on a cell edge,
+      // so the worst-case planimetric error is half a cell. A fixed 25×25
+      // grid over a 10 km box means ±200 m of drift against the topo
+      // basemap — that was the visible "offset". Target ~120 m cells and
+      // cap the grid at 57×57 (3249 samples ≈ 33 API calls).
+      const spanKm = Math.max(widthKm, heightKm);
+      const N = Math.max(25, Math.min(57, Math.round((spanKm * 1000) / 120) + 1));
       const gridLngs = new Array(N).fill(0).map((_, i) => bbox[0] + (i / (N - 1)) * (bbox[2] - bbox[0]));
       const gridLats = new Array(N).fill(0).map((_, j) => bbox[1] + (j / (N - 1)) * (bbox[3] - bbox[1]));
 
@@ -6397,9 +6689,8 @@
         // Open-Meteo Elevation API — free, no key, CORS-enabled, much
         // more reliable than Open-Elevation (which is frequently down).
         // Endpoint accepts up to 100 lat/lng pairs per call as a comma-
-        // separated list. We have 25×25 = 625 points, so we batch in
-        // chunks of 100. Open-Elevation kept as a fallback if Open-Meteo
-        // fails (e.g. rate-limited).
+        // separated list, so we batch in chunks of 100. Open-Elevation kept
+        // as a fallback if Open-Meteo fails (e.g. rate-limited).
         const allElevations = new Array(N * N);
         const flat = [];
         for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
@@ -6443,18 +6734,33 @@
             allElevations[index++] = elevs[k];
           }
         }
-        // Build the elevation grid Z[j][i].
+        // Build the elevation grid Z[j][i]. The API returns null over water
+        // and on tile gaps; an unguarded null poisons min/max and every
+        // marching-squares comparison, which used to silently produce an
+        // empty result with no explanation.
         const Z = [];
         for (let j = 0; j < N; j++) {
           Z.push(new Array(N));
           for (let i = 0; i < N; i++) {
-            Z[j][i] = allElevations[j * N + i];
+            const v = Number(allElevations[j * N + i]);
+            Z[j][i] = Number.isFinite(v) ? v : null;
           }
         }
-        let minZ = Infinity, maxZ = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity, validCount = 0;
         for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-          if (Z[j][i] < minZ) minZ = Z[j][i];
-          if (Z[j][i] > maxZ) maxZ = Z[j][i];
+          const v = Z[j][i];
+          if (v == null) continue;
+          validCount++;
+          if (v < minZ) minZ = v;
+          if (v > maxZ) maxZ = v;
+        }
+        if (validCount < 4) {
+          throw new Error("Aucune altitude exploitable pour cette zone.");
+        }
+        // Fill the holes with the mean so cells stay comparable.
+        const meanZ = (minZ + maxZ) / 2;
+        for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+          if (Z[j][i] == null) Z[j][i] = meanZ;
         }
 
         // Generate contour levels from floor(min/step)*step to ceil(max/step)*step.
@@ -6524,11 +6830,13 @@
               clipped.push(seg);
             }
           }
-          // Push every kept segment as part of a MultiLineString for this level.
+          // Stitch the loose cell-edge segments into continuous polylines.
+          // Rendering them as separate two-point segments looked jagged and
+          // gave nowhere to hang a line-placed elevation label.
           if (clipped.length > 0) {
             allFeatures.push({
               type: 'Feature',
-              geometry: { type: 'MultiLineString', coordinates: clipped },
+              geometry: { type: 'MultiLineString', coordinates: chainSegments(clipped) },
               properties: { level: L },
             });
           }
@@ -6552,24 +6860,16 @@
           properties: { _derived: true, _derivedKind: 'contours' }
         }, 'line', { name: `Courbes ${step}m de ${poly.name}` });
 
-        // Generate elevation labels: place a label at the centroid of each
-        // contour level's segments (one label per level, not per segment,
-        // to avoid clutter).
+        // Elevation labels ride *on* the curves, like a topographic sheet:
+        // one line feature per level, rendered with symbol-placement 'line'
+        // so MapLibre repeats and rotates "120 m" along each contour.
         const elevationLabelFeatures = [];
         for (const lf of allFeatures) {
-          const segs = lf.geometry.coordinates;
-          if (!segs.length) continue;
-          let bestSeg = segs[0];
-          let bestLen = 0;
-          for (const s of segs) {
-            const dx = s[1][0] - s[0][0], dy = s[1][1] - s[0][1];
-            const len = dx * dx + dy * dy;
-            if (len > bestLen) { bestLen = len; bestSeg = s; }
-          }
-          const mid = [(bestSeg[0][0] + bestSeg[1][0]) / 2, (bestSeg[0][1] + bestSeg[1][1]) / 2];
+          const lines = (lf.geometry.coordinates || []).filter(l => l && l.length >= 2);
+          if (!lines.length) continue;
           elevationLabelFeatures.push({
             type: 'Feature',
-            geometry: { type: 'Point', coordinates: mid },
+            geometry: { type: 'MultiLineString', coordinates: lines },
             properties: { elevation: lf.properties.level, contourOwnerId: newF.id },
           });
         }
@@ -6582,9 +6882,16 @@
         ensureDerivedLayers();
         syncDerivedLayer();
         notifyFeatures();
-        if (result) {
-          result.style.color = 'var(--brand)';
-          result.textContent = `✓ ${levels.length} niveaux tracés (alt ${minZ.toFixed(0)} → ${maxZ.toFixed(0)} m).`;
+        // notifyFeatures re-renders the panel, so the captured `result` node is
+        // detached by now: re-query it or the success message never shows.
+        const resultAfter = document.querySelector('#cn-result') || result;
+        if (resultAfter) {
+          const cellM = (spanKm * 1000) / (N - 1);
+          resultAfter.style.color = 'var(--brand)';
+          resultAfter.innerHTML = `✓ ${levels.length} niveaux tracés (alt ${minZ.toFixed(0)} → ${maxZ.toFixed(0)} m).`
+            + `<br><span style="color:var(--ink-2)">Grille ${N}×${N} · maille ≈ ${cellM.toFixed(0)} m · `
+            + `précision planimétrique ≈ ±${(cellM / 2).toFixed(0)} m. Un léger décalage avec les courbes `
+            + `du fond « Terrain » est normal : les deux proviennent de MNT différents.</span>`;
         }
         log.info('[HydraulicGIS] contour lines created:', newF.id, 'levels=' + levels.length);
       } catch (err) {
@@ -6947,7 +7254,9 @@
         });
       }
       // Keep above td-* on every sync.
-      for (const id of ['app-derived-fill', 'app-derived-outline', 'app-derived-line', 'app-derived-point', 'app-contours-line']) {
+      for (const id of ['app-derived-fill', 'app-derived-outline', 'app-derived-line',
+        'app-derived-point', 'app-contours-line',
+        'app-contour-labels-symbol', 'app-contour-labels-point']) {
         if (map.getLayer(id)) try { map.moveLayer(id); } catch (_) {}
       }
     } catch (e) {
@@ -6969,15 +7278,43 @@
       if (!map.getLayer('app-contour-labels-symbol')) {
         map.addLayer({
           id: 'app-contour-labels-symbol', type: 'symbol', source: 'app-contour-labels',
+          filter: ['==', ['geometry-type'], 'LineString'],
           layout: {
             'text-field': ['concat', ['to-string', ['round', ['get', 'elevation']]], ' m'],
-            'text-font': ['Arial Unicode MS Regular'],
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-size': 11,
+            'text-padding': 2,
+            // Topographic-sheet style: the value rides along the curve and
+            // repeats, instead of a single floating point label per level.
+            'symbol-placement': 'line',
+            'symbol-spacing': 150,
+            'text-rotation-alignment': 'map',
+            'text-pitch-alignment': 'viewport',
+            'text-keep-upright': true,
+            'text-max-angle': 25,
+          },
+          paint: {
+            'text-color': '#ffd166',
+            'text-halo-color': '#0b0f14',
+            'text-halo-width': 1.6,
+          },
+        });
+      }
+      // Contours saved before line-placed labels stored one Point per level.
+      if (!map.getLayer('app-contour-labels-point')) {
+        map.addLayer({
+          id: 'app-contour-labels-point', type: 'symbol', source: 'app-contour-labels',
+          filter: ['==', ['geometry-type'], 'Point'],
+          layout: {
+            'text-field': ['concat', ['to-string', ['round', ['get', 'elevation']]], ' m'],
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-size': 11,
             'text-padding': 2,
           },
           paint: {
             'text-color': '#ffd166',
             'text-halo-color': '#0b0f14',
-            'text-halo-width': 1.4,
+            'text-halo-width': 1.6,
           },
         });
       }
@@ -7555,6 +7892,8 @@
       yTickEls.push(`<text x="${PAD_L - 4}" y="${yPos + 3}" text-anchor="end" font-size="9" fill="#aab4c2" font-family="monospace">${z.toFixed(0)}</text>`);
       yTickEls.push(`<line x1="${PAD_L}" y1="${yPos}" x2="${PAD_L + innerW}" y2="${yPos}" stroke="#232c38" stroke-width="0.5"/>`);
     }
+    const totalDistM = data.samples.length ? data.samples[data.samples.length - 1].distM : 0;
+    const acc = estimateElevationAccuracy(data.samples, data.stats);
     const xTicks = 4;
     const xTickEls = [];
     for (let i = 0; i <= xTicks; i++) {
@@ -7586,9 +7925,19 @@
             <span style="color:#ef5a5a;"><span style="color:var(--ink-2)">▼ Descente :</span> ${data.stats.descent.toFixed(0)} m</span>
           </div>
           <div style="margin-top:4px;">
-            <span style="color:var(--ink-2)">Pente moyenne :</span> ${(data.stats.ascent / data.samples[data.samples.length-1].distM * 100).toFixed(1)} %
+            <span style="color:var(--ink-2)">Pente moyenne :</span> ${totalDistM > 0 ? (data.stats.ascent / totalDistM * 100).toFixed(1) : '0.0'} %
+          </div>
+          <div style="margin-top:6px; padding-top:6px; border-top:1px solid var(--line);">
+            <span style="color:var(--ink-2)">Marge d'erreur :</span>
+            <span style="color:#f7b955;">± ${acc.absM.toFixed(1)} m (≈ ± ${acc.pct.toFixed(1)} %)</span>
           </div>
         </div>
+        <p style="font-size:10.5px; color:var(--ink-2); margin:6px 0 0; line-height:1.45;">
+          Estimation basée sur le MNT Copernicus GLO-90 (maille ≈ 90 m, erreur verticale ≈ ± 4 m),
+          majorée par la pente locale. Le pourcentage est rapporté au dénivelé total du profil
+          (${(data.stats.max - data.stats.min).toFixed(0)} m). Les valeurs de montée et de descente
+          sont surestimées par le bruit du MNT ; ce profil ne remplace pas un levé topographique.
+        </p>
 
         <button class="btn btn-subtle" id="el-recompute" style="width:100%; margin-top:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4v5h5 M4 9a8 8 0 0114-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 20v-5h-5 M20 15a8 8 0 01-14 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -7722,7 +8071,46 @@
       if (!data.elevation) throw new Error('Réponse Open-Meteo invalide.');
       all.push(...data.elevation);
     }
+    // The API returns null over water / on tile gaps. A single null turns the
+    // whole SVG path into "NaN" and the chart silently disappears, so carry
+    // the last known value forward (and backward for a leading null).
+    let firstGood = null, lastGood = null;
+    for (let i = 0; i < all.length; i++) {
+      const v = Number(all[i]);
+      if (Number.isFinite(v)) {
+        all[i] = v;
+        lastGood = v;
+        if (firstGood === null) firstGood = v;
+      } else {
+        all[i] = lastGood;
+      }
+    }
+    if (firstGood === null) throw new Error('Aucune altitude disponible sur cette ligne.');
+    for (let i = 0; i < all.length && all[i] === null; i++) all[i] = firstGood;
     return all;
+  }
+
+  // Open-Meteo serves Copernicus DEM GLO-90: ~90 m posting, vertical accuracy
+  // around ±4 m (LE90) on open terrain. On a slope, the horizontal sampling
+  // error (~half a cell) turns into extra vertical error, so the margin grows
+  // with the terrain gradient.
+  const DEM_VERTICAL_RMSE_M = 4;
+  const DEM_POSTING_M = 90;
+
+  function estimateElevationAccuracy(samples, stats) {
+    let slopeSum = 0, slopeN = 0;
+    for (let i = 1; i < samples.length; i++) {
+      const dd = samples[i].distM - samples[i - 1].distM;
+      if (!(dd > 0)) continue;
+      slopeSum += Math.abs(samples[i].elev - samples[i - 1].elev) / dd;
+      slopeN++;
+    }
+    const meanSlope = slopeN ? slopeSum / slopeN : 0;
+    const slopeTerm = (DEM_POSTING_M / 2) * meanSlope;
+    const absM = Math.sqrt(DEM_VERTICAL_RMSE_M * DEM_VERTICAL_RMSE_M + slopeTerm * slopeTerm);
+    const amplitude = Math.max(1, stats.max - stats.min);
+    const pct = Math.min(100, (absM / amplitude) * 100);
+    return { absM, pct, meanSlope };
   }
 
   function computeElevationStats(samples) {
