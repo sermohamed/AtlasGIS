@@ -1487,14 +1487,24 @@
     if (!f || f.kind !== 'point') return;
     const tid = f.geojson && f.geojson.properties && f.geojson.properties._terraId;
     if (!tid || !drawControl) return;
-    // Clear _terraId BEFORE removeFeatures so the change/delete handler
-    // cannot match this store row and delete the point we just created.
+    // Ban the id first so the change/delete handler cannot match this store
+    // row and delete the point we just created. Drop _terraId only once the
+    // removal actually succeeded: clearing it up front meant a failed removal
+    // left a terra-draw copy that nothing could ever remove again.
     try { detachedTerraIds.add(String(tid)); } catch (_) {}
-    try { delete f.geojson.properties._terraId; } catch (_) {}
+    let removed = false;
     try {
       const td = drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
-      if (td && typeof td.removeFeatures === 'function') td.removeFeatures([tid]);
-    } catch (_) {}
+      if (td && typeof td.removeFeatures === 'function') {
+        td.removeFeatures([tid]);
+        removed = true;
+      }
+    } catch (err) {
+      log.warn('[HydraulicGIS] detachPointFromTerraDraw removal failed:', err);
+    }
+    if (removed) {
+      try { delete f.geojson.properties._terraId; } catch (_) {}
+    }
     // Keep the ban for a short window in case delete events arrive late.
     setTimeout(() => { try { detachedTerraIds.delete(String(tid)); } catch (_) {} }, 2000);
   }
@@ -1587,6 +1597,8 @@
   const STORAGE_KEY = 'hydraulic-gis:features:v1';
   const GROUPS_KEY = 'hydraulic-gis:groups:v1';
   const DRAW_DEFAULTS_KEY = 'hydraulic-gis:draw-defaults:v1';
+  const LEGEND_KEY = 'hydraulic-gis:legend:v1';
+  const GRID_KEY = 'hydraulic-gis:grid:v1';
   const VALID_BASEMAP_IDS = ['satellite', 'hybrid', 'terrain', 'dark', 'light'];
   function loadState() {
     try {
@@ -1614,6 +1626,22 @@
         }
       }
     } catch (e) {}
+    // Legend and grid settings: both were documented as persistent but were
+    // only ever held in memory, so every reload wiped the user's setup.
+    try {
+      const lg = localStorage.getItem(LEGEND_KEY);
+      if (lg) {
+        const parsed = JSON.parse(lg);
+        if (parsed && typeof parsed === 'object') state._legend = parsed;
+      }
+    } catch (e) {}
+    try {
+      const gr = localStorage.getItem(GRID_KEY);
+      if (gr) {
+        const parsed = JSON.parse(gr);
+        if (parsed && typeof parsed === 'object') Object.assign(gridState, parsed);
+      }
+    } catch (e) {}
   }
   function saveState() {
     try {
@@ -1624,6 +1652,12 @@
     } catch (e) {}
     try {
       localStorage.setItem(DRAW_DEFAULTS_KEY, JSON.stringify(state.drawDefaults));
+    } catch (e) {}
+    try {
+      if (state._legend) localStorage.setItem(LEGEND_KEY, JSON.stringify(state._legend));
+    } catch (e) {}
+    try {
+      if (typeof gridState !== 'undefined') localStorage.setItem(GRID_KEY, JSON.stringify(gridState));
     } catch (e) {}
   }
 
@@ -1675,7 +1709,11 @@
       if (map.getLayer('app-selection-line')) map.moveLayer('app-selection-line');
       if (map.getLayer('app-selection-point')) map.moveLayer('app-selection-point');
       raiseLabelLayers();
-    } catch (_) {}
+    } catch (err) {
+      // Silently dropping this made the yellow halo just stop updating, which
+      // reads to the user as "selection is broken" with nothing in the console.
+      log.warn('[HydraulicGIS] syncSelectionHighlight failed:', err);
+    }
   }
   // Labels and their leader lines must always sit on top of the terra-draw
   // layers, which get (re)created at the top of the stack while drawing.
@@ -2143,6 +2181,17 @@
           try { td.removeFeatures(uniqueIds); } catch (_) {}
           requestAnimationFrame(() => { try { td.removeFeatures(uniqueIds); } catch (_) {} });
         }
+        // The store is already empty, so anything left in terra-draw can no
+        // longer be reached from the UI. Verify and wipe it outright.
+        requestAnimationFrame(() => {
+          try {
+            const left = typeof td.getSnapshot === 'function' ? (td.getSnapshot() || []).length : 0;
+            if (left && typeof td.clear === 'function') {
+              log.warn('[HydraulicGIS] clearAll:', left, 'shape(s) left in terra-draw, forcing clear()');
+              td.clear();
+            }
+          } catch (err) { log.warn('[HydraulicGIS] clearAll verification failed:', err); }
+        });
       }
     } catch (err) { log.warn('[HydraulicGIS] removeFeatures failed:', err); }
 
@@ -2264,10 +2313,21 @@
 
   function toggleVisibility(id) {
     const f = state.features.find(x => x.id === id);
-    if (f) {
-      f.style.visible = !f.style.visible; f.updatedAt = Date.now();
-      notifyFeatures();
+    if (!f) return;
+    f.style.visible = !f.style.visible;
+    f.updatedAt = Date.now();
+    // Hidden features are skipped by restoreFeaturesToTerraDraw, so after a
+    // reload they are absent from terra-draw entirely and toggling the eye
+    // back on used to show nothing. Re-add them on the way back in.
+    if (f.style.visible) {
+      try {
+        const td = drawControl?.getTerraDrawInstance?.();
+        const tid = f.geojson?.properties?._terraId;
+        const known = !!(td && tid && typeof td.hasFeature === 'function' && td.hasFeature(tid));
+        if (!known) pushFeatureToTerraDraw(f);
+      } catch (_) {}
     }
+    notifyFeatures();
   }
 
   function getFeatureIdsInGroup(gid) {
@@ -2660,9 +2720,18 @@
   let _geomanModule = null;
   let _geomanInstance = null;
 
+  let _appLayersInstallQueued = false;
   function installAppLayers() {
     if (!map.isStyleLoaded()) {
-      map.once('idle', () => { try { installAppLayers(); syncFeaturesToMap(); } catch(_) {} });
+      // Guarded: a burst of early calls would otherwise queue N one-shot
+      // callbacks that all run the same install on the first idle.
+      if (!_appLayersInstallQueued) {
+        _appLayersInstallQueued = true;
+        onStyleReady(() => {
+          _appLayersInstallQueued = false;
+          try { installAppLayers(); syncFeaturesToMap(); } catch (_) {}
+        });
+      }
       return;
     }
     // Idempotent: already installed?
@@ -2771,8 +2840,16 @@
     const geom = f.geojson && f.geojson.geometry;
     if (!geom) return null;
     if (geom.type === 'Polygon') {
-      const ring = geom.coordinates[0];
-      if (!ring || !ring.length) return null;
+      const full = geom.coordinates[0];
+      if (!full || !full.length) return null;
+      // Drop the closing coordinate: counting the first vertex twice skewed
+      // the centroid by several percent on low-vertex shapes.
+      const first = full[0];
+      const last = full[full.length - 1];
+      const closed = full.length > 1 && first && last
+        && first[0] === last[0] && first[1] === last[1];
+      const ring = closed ? full.slice(0, -1) : full;
+      if (!ring.length) return null;
       let x = 0, y = 0;
       for (const [lng, lat] of ring) { x += lng; y += lat; }
       return [x / ring.length, y / ring.length];
@@ -3033,8 +3110,11 @@
         try {
           const s2 = map.getSource(SRC_LABELS);
           if (!s2) return;
+          // Reuse the list we were given: rebuilding here doubled the work
+          // and, worse, buildLabelFeatures migrates legacy labelAnchor values,
+          // so a render pass quietly mutated persisted state.
           s2.setData({ type: 'FeatureCollection', features: [] });
-          s2.setData({ type: 'FeatureCollection', features: buildLabelFeatures() });
+          s2.setData({ type: 'FeatureCollection', features: list });
           map.triggerRepaint();
         } catch (_) {}
       });
@@ -3358,6 +3438,7 @@
       ours.geojson.geometry = rounded;
       ours.metrics = computeMetrics(ours.geojson, ours.kind);
       ours.updatedAt = Date.now();
+      elevationCache.delete(ours.id);
 
       const td = drawControl?.getTerraDrawInstance?.();
       const inTerraDraw = !!(td && typeof td.hasFeature === 'function'
@@ -3499,9 +3580,19 @@
     canvas.addEventListener('pointercancel', () => { cancelVertexLongPress(); }, true);
   }
 
+  let _syncRetryQueued = false;
   function syncFeaturesToMap() {
     if (!map.isStyleLoaded()) {
-      requestAnimationFrame(() => { try { if (map.isStyleLoaded()) syncFeaturesToMap(); } catch (_) {} });
+      // Retry until the style is actually usable. A single frame was not
+      // enough during a basemap swap or a slow first load, and the call was
+      // then dropped for good: no label, no halo until an unrelated sync.
+      if (!_syncRetryQueued) {
+        _syncRetryQueued = true;
+        onStyleReady(() => {
+          _syncRetryQueued = false;
+          try { syncFeaturesToMap(); } catch (_) {}
+        });
+      }
       return;
     }
     if (!map.getSource(SRC_LABELS)) {
@@ -3912,10 +4003,43 @@
     }
   }
 
+  // installDrawControl runs again after every basemap switch, so its
+  // long-lived map/canvas listeners have to be replaced instead of stacked.
+  // A second copy of the selection pick handler toggles the same feature
+  // twice per tap, which silently disables multi-select.
+  const _drawListeners = [];
+  let _setStyleWrapped = false;
+  function addDrawListener(target, type, handler, opts) {
+    if (target === map) map.on(type, handler);
+    else target.addEventListener(type, handler, opts);
+    _drawListeners.push({ target, type, handler, opts });
+  }
+  function clearDrawListeners() {
+    while (_drawListeners.length) {
+      const { target, type, handler, opts } = _drawListeners.pop();
+      try {
+        if (target === map) map.off(type, handler);
+        else target.removeEventListener(type, handler, opts);
+      } catch (_) {}
+    }
+  }
+
   function resetDrawUi() {
     try {
+      // The gear panel is moved *into* the dropdown wrapper when the toolbar
+      // is built, so removing the wrapper would delete it for good and
+      // mountDrawDefaultsInToolbar would silently find nothing to mount.
+      const dd = document.getElementById('draw-defaults');
+      const mapArea = document.getElementById('map-area') || document.body;
       const wrapper = document.getElementById('draw-dropdown-wrapper');
+      // The gear may be a direct child of the wrapper or nested inside its
+      // button row, so test containment rather than the immediate parent.
+      if (dd && wrapper && wrapper.contains(dd)) {
+        mapArea.appendChild(dd);
+        dd.style.display = 'none';
+      }
       if (wrapper) wrapper.remove();
+      clearDrawListeners();
       if (drawControl) {
         try { map.removeControl(drawControl); } catch (_) {}
       }
@@ -4072,7 +4196,10 @@
             row.appendChild(toggle);
 
             const ddEl = document.getElementById('draw-defaults');
-            if (ddEl) row.appendChild(ddEl);
+            if (ddEl) {
+              row.appendChild(ddEl);
+              ddEl.style.removeProperty('display');
+            }
 
             wrapper.appendChild(row);
             wrapper.appendChild(drawer);
@@ -4457,11 +4584,16 @@
       refreshTerraDrawStylesHook = refreshTerraDrawStyles;
       // Hook the style refresh into our store. We do this by replacing
       // setStyle to also trigger a terra-draw repaint.
-      const _origSetStyle = setStyle;
-      setStyle = function (id, patch) {
-        _origSetStyle(id, patch);
-        refreshTerraDrawStyles();
-      };
+      // Guarded: installDrawControl runs again on every basemap switch, and
+      // an unguarded re-wrap builds an ever-growing chain of wrappers.
+      if (!_setStyleWrapped) {
+        _setStyleWrapped = true;
+        const _origSetStyle = setStyle;
+        setStyle = function (id, patch) {
+          _origSetStyle(id, patch);
+          refreshTerraDrawStyles();
+        };
+      }
 
 
       // ─── Bug workaround: wrapper disables Select/Delete during selection ───
@@ -4692,7 +4824,7 @@
       }
 
       // Re-add layer after basemap style swaps (style swap drops custom layers).
-      map.on('styledata', () => {
+      addDrawListener(map, 'styledata', () => {
         // If the layer was lost in the swap and we had a vertex showing,
         // re-create it (data is already in our source if we cached it,
         // but simpler: just ensure the layer exists for next use).
@@ -4711,7 +4843,7 @@
           }
         } catch (_) {}
       }
-      map.on('styledata', () => requestAnimationFrame(boostTerraDrawPointSize));
+      addDrawListener(map, 'styledata', () => requestAnimationFrame(boostTerraDrawPointSize));
 
       // Detect degenerate first-tap geometry from a terra-draw snapshot.
       // Returns the coordinate to mark, or null if no degenerate feature is
@@ -4831,7 +4963,7 @@
       // so map.on('click') is too late. We instead use a capture-phase
       // pointerdown on the canvas itself.
       const mapCanvas = map.getCanvas();
-      mapCanvas.addEventListener('pointerdown', (ev) => {
+      addDrawListener(mapCanvas, 'pointerdown', (ev) => {
         try {
           if (!ev.isPrimary) return;
           const mode = td && td.getMode && td.getMode();
@@ -4867,7 +4999,7 @@
         } catch (_) {}
       }, true);  // capture phase — runs BEFORE terra-draw's own listener
 
-      map.on('mousemove', () => {
+      addDrawListener(map, 'mousemove', () => {
         try { syncDrawPreview(); } catch (_) {}
       });
 
@@ -5100,7 +5232,17 @@
               return;
             }
             createStoreFeatureFromTdFallback(id, tf, ctx && ctx.mode);
-          } catch (_) {}
+          } catch (err) {
+            // This is the only path that turns a finished terra-draw shape
+            // into a store row. Swallowing it left the shape on screen while
+            // it was absent from Calques, unnamed, unsaved and gone on reload.
+            log.error('[HydraulicGIS] finish handler failed:', err);
+            ui.confirm(
+              'Objet non enregistré',
+              "Le tracé n'a pas pu être enregistré. Réessayez ; si le problème persiste, rechargez la page.",
+              () => {}
+            );
+          }
         });
 
         // Keep app selection state in sync with the native arrow select path,
@@ -5138,10 +5280,18 @@
               if (!tf) continue;
               const ours = findStoreFeatureByTerraIdFallback(tid);
               if (ours) {
-                ours.geojson.geometry = tf.geometry;
-                ours.metrics = computeMetrics({ type: 'Feature', geometry: tf.geometry }, ours.kind);
-                ours.updatedAt = Date.now();
-                touched++;
+                // Per-feature guard: one malformed row must not abort the
+                // whole batch and silently drop everyone else's edit.
+                try {
+                  ours.geojson.geometry = tf.geometry;
+                  ours.metrics = computeMetrics({ type: 'Feature', geometry: tf.geometry }, ours.kind);
+                  ours.updatedAt = Date.now();
+                  // The cached elevation profile belongs to the old geometry.
+                  elevationCache.delete(ours.id);
+                  touched++;
+                } catch (err) {
+                  log.error('[HydraulicGIS] geometry sync failed for', ours.id, err);
+                }
                 continue;
               }
               // Do not create store rows from change/create. We only create on finish
@@ -5151,7 +5301,9 @@
               notifyFeatures();
               forceYellowHalo();
             }
-          } catch (_) {}
+          } catch (err) {
+            log.error('[HydraulicGIS] change handler failed:', err);
+          }
         });
 
         // Backup pointerup/click selection path for all device types.
@@ -5244,11 +5396,11 @@
           const canvas = map.getCanvas();
           let down = null;
           let suppressClick = false;
-          canvas.addEventListener('pointerdown', (ev) => {
+          addDrawListener(canvas, 'pointerdown', (ev) => {
             if (!ev.isPrimary) return;
             down = { x: ev.clientX, y: ev.clientY };
           }, true);
-          canvas.addEventListener('pointerup', (ev) => {
+          addDrawListener(canvas, 'pointerup', (ev) => {
             if (!ev.isPrimary || !down) return;
             const dx = ev.clientX - down.x;
             const dy = ev.clientY - down.y;
@@ -5261,7 +5413,7 @@
               setTimeout(() => { suppressClick = false; }, 250);
             } catch (_) {}
           }, true);
-          map.on('click', (e) => {
+          addDrawListener(map, 'click', (e) => {
             if (suppressClick) return;
             applyPick(e.point);
           });
@@ -5285,7 +5437,7 @@
           }, true);
         }
         // Keep the yellow halo on top whenever selection is active.
-        map.on('click', () => {
+        addDrawListener(map, 'click', () => {
           try {
             if (state.selectActive === true) enforceYellowSelection();
           } catch (_) {}
@@ -5463,6 +5615,7 @@
           || (window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 1280);
     },
     setPanel(id) {
+      if (id !== 'coordinates') { try { cancelCoordPickMode(); } catch (_) {} }
       if (state.activePanel === id) {
         state.activePanel = null;
       } else {
@@ -5480,6 +5633,7 @@
       document.getElementById('sheet').classList.add('visible');
     },
     closeSheet() {
+      try { cancelCoordPickMode(); } catch (_) {}
       state.activePanel = null;
       document.getElementById('scrim').classList.remove('visible');
       document.getElementById('sheet').classList.remove('visible');
@@ -5569,9 +5723,16 @@
       const skipSheetBody = state.activePanel !== 'layers'
         && sheetEl && af && sheetEl.contains(af) && isLiveInput;
 
+      // Only ONE of the two containers may hold the panel markup at a time.
+      // Rendering into both duplicated every element id (#cc-a, #files-status,
+      // #cn-result…), so getElementById resolved to whichever copy came first
+      // in the DOM — often the hidden one, and the user saw no feedback.
+      const mobile = this.isMobile();
+
       // Render desktop panel
-      if (this.isMobile()) {
+      if (mobile) {
         document.getElementById('sidebar-panel').classList.remove('visible');
+        if (panelEl) panelEl.innerHTML = '';
       } else {
         if (state.activePanel && state.activePanel !== 'menu') {
           document.getElementById('sidebar-panel').classList.add('visible');
@@ -5579,19 +5740,21 @@
           if (!skipPanelBody) renderPanel('panel-body', state.activePanel);
         } else {
           document.getElementById('sidebar-panel').classList.remove('visible');
+          if (panelEl) panelEl.innerHTML = '';
         }
       }
 
       // Render mobile sheet
-      if (state.activePanel) {
+      if (state.activePanel && (mobile || state.activePanel === 'menu')) {
         const t = state.activePanel === 'menu' ? 'Outils' : (PANEL_TITLES[state.activePanel] || '');
         document.getElementById('sheet-title').textContent = t;
         if (!skipSheetBody) renderPanel('sheet-body', state.activePanel);
-        if (this.isMobile()) {
+        if (mobile) {
           document.getElementById('scrim').classList.add('visible');
           document.getElementById('sheet').classList.add('visible');
         }
       } else {
+        if (sheetEl) sheetEl.innerHTML = '';
         document.getElementById('scrim').classList.remove('visible');
         document.getElementById('sheet').classList.remove('visible');
       }
@@ -5913,6 +6076,8 @@
       if (drawer) wrapper.insertBefore(dd, drawer);
       else wrapper.appendChild(dd);
     }
+    // Undo the hiding applied while the panel was parked outside the toolbar.
+    if (dd) dd.style.removeProperty('display');
   }
 
   function initDrawDefaultsUi() {
@@ -6730,6 +6895,11 @@
           const slice = flat.slice(off, Math.min(off + BATCH, flat.length));
           if (result) result.textContent = `Échantillonnage ${off + slice.length} / ${flat.length}…`;
           const elevs = await fetchElevations(slice);
+          // A short batch would shift every later sample by one grid cell and
+          // silently produce plausible-looking but misplaced contours.
+          if (!Array.isArray(elevs) || elevs.length !== slice.length) {
+            throw new Error("Réponse d'élévation incomplète — réessayez dans un instant.");
+          }
           for (let k = 0; k < elevs.length; k++) {
             allElevations[index++] = elevs[k];
           }
@@ -6757,13 +6927,29 @@
         if (validCount < 4) {
           throw new Error("Aucune altitude exploitable pour cette zone.");
         }
-        // Fill the holes with the mean so cells stay comparable.
-        const meanZ = (minZ + maxZ) / 2;
+        // Fill the holes with the true mean of the valid samples. Using the
+        // midrange invented an elevation that may occur nowhere in the area
+        // and drew spurious rings around water and tile gaps.
+        let sumZ = 0;
+        for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+          if (Z[j][i] != null) sumZ += Z[j][i];
+        }
+        const meanZ = sumZ / validCount;
         for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
           if (Z[j][i] == null) Z[j][i] = meanZ;
         }
 
         // Generate contour levels from floor(min/step)*step to ceil(max/step)*step.
+        // Cap the count: a 0.1 m step over 800 m of relief would launch 8000
+        // marching-squares passes and freeze the tab with the button stuck on
+        // "Échantillonnage…".
+        const MAX_LEVELS = 200;
+        const wanted = Math.floor((maxZ - minZ) / step) + 1;
+        if (wanted > MAX_LEVELS) {
+          const suggested = Math.ceil((maxZ - minZ) / MAX_LEVELS);
+          throw new Error(`Pas trop fin : ${wanted} courbes pour ${(maxZ - minZ).toFixed(0)} m de dénivelé. `
+            + `Utilisez un pas d'au moins ${suggested} m.`);
+        }
         const firstLevel = Math.ceil(minZ / step) * step;
         const lastLevel  = Math.floor(maxZ / step) * step;
         const levels = [];
@@ -7064,6 +7250,9 @@
   function updateLegendBox() {
     let box = document.getElementById('legend-box');
     const cfg = state._legend || { enabled: false };
+    // Every legend control funnels through here, so this is the one place
+    // that has to persist the configuration.
+    try { saveState(); } catch (_) {}
     if (!cfg.enabled) {
       if (box) box.style.display = 'none';
       return;
@@ -7325,6 +7514,14 @@
 
   /* ═══ 11. PANEL CONTENT — COORDINATES ═══════════════════════════════════════ */
   let pickModeOff = null;
+  let pickModeAbort = null;
+  // Drop any armed "choisir sur la carte" gesture. Safe to call at any time.
+  function cancelCoordPickMode() {
+    const abort = pickModeAbort;
+    pickModeOff = null;
+    pickModeAbort = null;
+    if (abort) { try { abort(); } catch (_) {} }
+  }
   // coordHistory hoisted at script top.
 
   function renderCoordinates() {
@@ -7399,6 +7596,9 @@
   }
 
   function attachCoordinatesEvents(root) {
+    // A previous render may have left a pick gesture armed over destroyed
+    // DOM nodes.
+    cancelCoordPickMode();
     const fromSel = root.querySelector('#cc-from');
     const toSel = root.querySelector('#cc-to');
     const fmtSel = root.querySelector('#cc-format');
@@ -7521,6 +7721,7 @@
         ui._pendingPickResult = { a: fields.a, b: fields.b, fromCrs: fromSel.value };
         lastCoordFlyTarget = [lng, lat];
         pickModeOff = null;
+        pickModeAbort = null;
         cleanup();
         reopenSheet();
       };
@@ -7533,6 +7734,14 @@
         map.off('click', onClick);
         cleanup();
         reopenSheet();
+      };
+      // Teardown without reopening the sheet, for when the panel is closed or
+      // re-rendered while pick mode is still armed. Without it the stale
+      // map.once('click') survived and the next tap anywhere on the map
+      // re-opened the Coordonnées sheet out of nowhere.
+      pickModeAbort = () => {
+        map.off('click', onClick);
+        try { cleanup(); } catch (_) {}
       };
     });
 
@@ -7758,7 +7967,7 @@
             <label class="field-label">Historique récent</label>
             <div id="sr-history" class="stack-tight">
               ${searchHistory.map(h => `
-                <button class="surface" style="display:flex; flex-direction:column; align-items:flex-start; gap:2px; cursor:pointer; text-align:left; width:100%; padding:8px 12px; border:1px solid var(--line); background:var(--bg-2); color:var(--ink-0);" data-recall="${h.input}">
+                <button class="surface" style="display:flex; flex-direction:column; align-items:flex-start; gap:2px; cursor:pointer; text-align:left; width:100%; padding:8px 12px; border:1px solid var(--line); background:var(--bg-2); color:var(--ink-0);" data-recall="${escapeHtml(h.input)}">
                   <span style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px;">${escapeHtml(h.input)}</span>
                   <span style="font-size:10px; color:var(--ink-2);">${escapeHtml(h.crs)}</span>
                 </button>
@@ -7809,6 +8018,9 @@
       // Add to history
       searchHistory.unshift({ input: raw, crs: CRS_BY_ID[crsSel.value].label, ts: Date.now() });
       searchHistory = searchHistory.slice(0, 8);
+      // renderSearch is the only reader, so without this the new entry stayed
+      // invisible until the user switched panels and came back.
+      ui.render();
     }
 
     root.querySelector('#sr-go').addEventListener('click', go);
@@ -7876,7 +8088,7 @@
     const yMax = Math.max(...ys);
     const yPad = Math.max(2, (yMax - yMin) * 0.1);
     const yLo = yMin - yPad, yHi = yMax + yPad;
-    const px = (d) => PAD_L + (d / xMax) * innerW;
+    const px = (d) => PAD_L + (xMax > 0 ? d / xMax : 0) * innerW;
     const py = (z) => PAD_T + innerH - ((z - yLo) / (yHi - yLo)) * innerH;
 
     // Build path
@@ -8044,6 +8256,10 @@
     if (!coords || coords.length < 2) throw new Error('Ligne invalide.');
     // Total length using turf
     const totalKm = turf.length(feature, { units: 'kilometers' });
+    // A zero-length line (two taps on the same spot) would make every sample
+    // sit at distance 0, and the chart's d / xMax became NaN: the stats card
+    // rendered but the curve silently vanished.
+    if (!(totalKm > 0)) throw new Error('Ligne de longueur nulle : impossible de tracer un profil.');
     const step = totalKm / (n - 1);
     const samples = [];
     for (let i = 0; i < n; i++) {
@@ -8204,6 +8420,7 @@
       spacingSel.disabled = !gridState.enabled;
       labelsCb.disabled = !gridState.enabled;
       updateGrid();
+      saveState();
     }
 
     onCb.addEventListener('change', syncFromUI);
@@ -8464,11 +8681,18 @@
     for (const file of Array.from(e.target.files)) {
       try {
         const imported = await importFile(file);
-        for (const f of imported) state.features.push(f);
+        for (const f of imported) {
+          state.features.push(f);
+          // Lines and polygons are rendered by terra-draw, not by an app
+          // layer: without this the import listed correctly in Calques but
+          // drew nothing until the page was reloaded.
+          pushFeatureToTerraDraw(f);
+        }
         total += imported.length;
       } catch (er) { err = er.message; }
     }
     notifyFeatures();
+    try { syncDerivedLayer(); } catch (_) {}
     e.target.value = '';
     if (status) {
       status.className = err ? 'notice notice-error' : 'notice notice-success';
@@ -8725,7 +8949,12 @@
   }
 
   function escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      // Single quotes matter: several templates interpolate into
+      // onclick="… fn('${…}')" attributes.
+      .replace(/'/g, '&#39;');
   }
 
   /* ═══ 13. SHEET SWIPE-DOWN ══════════════════════════════════════════════════ */
