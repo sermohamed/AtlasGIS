@@ -157,6 +157,92 @@
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
   }
 
+  function bboxAreaDeg2(bbox) {
+    if (!bbox || bbox.length !== 4) return Infinity;
+    return Math.max(0.0001, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
+  }
+
+  /**
+   * Guess the most likely country for a WGS84 point using country bboxes
+   * and the bboxes of that country's projected CRS (smaller = more specific).
+   */
+  function detectCountry(lat, lon) {
+    if (!isFinite(lat) || !isFinite(lon)) {
+      return { code: 'XX', name: 'Monde / communs', confidence: 0, inBbox: false };
+    }
+    const scored = [];
+    for (const c of countries) {
+      if (!c || c.code === 'XX') continue;
+      const inCountry = pointInBbox(lon, lat, c.bbox);
+      let crsHits = 0;
+      let bestPri = 999;
+      let smallest = Infinity;
+      const links = countryLinks.get(c.code) || [];
+      for (const l of links) {
+        if (l.epsg === WGS84_EPSG || l.epsg === WEBMERC_EPSG) continue;
+        const def = byEpsg.get(l.epsg);
+        if (!def || !pointInBbox(lon, lat, def.bbox)) continue;
+        crsHits++;
+        const area = bboxAreaDeg2(def.bbox);
+        if (l.priority < bestPri || (l.priority === bestPri && area < smallest)) {
+          bestPri = l.priority;
+          smallest = area;
+        }
+      }
+      if (!inCountry && !crsHits) continue;
+      const centre = bboxCenter(c.bbox);
+      const dist = centre ? haversineKm(lon, lat, centre[0], centre[1]) : 1e9;
+      // Country bbox is strong evidence; a tight CRS hit breaks FR/ES ties.
+      const score = (inCountry ? 100 : 0)
+        + (crsHits ? 40 + Math.max(0, 15 - bestPri) + (1000 / smallest) : 0)
+        - dist * 0.01;
+      scored.push({
+        code: c.code,
+        name: c.name,
+        score,
+        dist,
+        inBbox: inCountry,
+        crsHits,
+      });
+    }
+    scored.sort((a, b) => b.score - a.score || a.dist - b.dist);
+    if (!scored.length) {
+      return { code: 'XX', name: 'Monde / communs', confidence: 0, inBbox: false };
+    }
+    const best = scored[0];
+    const confidence = best.inBbox && best.crsHits ? 0.95
+      : best.inBbox ? 0.8
+      : best.crsHits ? 0.65
+      : 0.4;
+    return {
+      code: best.code,
+      name: best.name,
+      confidence,
+      inBbox: best.inBbox,
+    };
+  }
+
+  /**
+   * Suggest country + default projected CRS for a location.
+   * Caller may still let the user override the dropdowns.
+   */
+  function suggestForLocation(lat, lon) {
+    const detected = detectCountry(lat, lon);
+    const country = detected.code || 'XX';
+    const ranked = getCRSFromLocation(lat, lon, { country, limit: 8 });
+    const projected = ranked.find((d) => !d.isGeographic && d.epsg !== WEBMERC_EPSG)
+      || (getCRSByCountry(country).find((d) => !d.isGeographic && d.epsg !== WEBMERC_EPSG) || null);
+    const wgs = getCRS(WGS84_EPSG);
+    return {
+      country,
+      countryName: detected.name,
+      confidence: detected.confidence,
+      crs: projected ? cloneDef(projected) : (wgs ? cloneDef(wgs) : null),
+      sourceCrs: wgs ? cloneDef(wgs) : null,
+      alternatives: ranked.slice(0, 5),
+    };
+  }
+
   /**
    * Suggest CRS for a location.
    * Sort: country priority → bbox containment → distance to bbox centre.
@@ -328,7 +414,9 @@
   }
 
   function listCountries() {
-    return countries.map((c) => Object.assign({}, c));
+    return countries.map((c) => Object.assign({}, c, {
+      bbox: c.bbox ? c.bbox.slice() : null,
+    }));
   }
 
   function bootstrap(data, proj4Ref) {
@@ -370,6 +458,8 @@
     getCRSByCountry,
     searchCRS,
     getCRSFromLocation,
+    detectCountry,
+    suggestForLocation,
     generateUTM,
     convert,
     toWgs84,

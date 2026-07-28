@@ -1061,7 +1061,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-28·aj (CRS registry)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-28·ak (CRS auto-detect)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -7769,9 +7769,8 @@
         <div>
           <label class="field-label">Pays / région</label>
           <select id="cc-country" class="field">${countryOptionsHtml(country)}</select>
-          <p style="font-size:11px;color:var(--ink-2);margin:6px 0 0;">
-            Les systèmes proposés viennent du registre CRS (pas de liste codée en dur).
-            UTM est généré dynamiquement selon la position.
+          <p id="cc-suggest-hint" style="font-size:11px;color:var(--ink-2);margin:6px 0 0;">
+            Pays et projection sont suggérés automatiquement selon le point (carte ou saisie) — vous pouvez les changer.
           </p>
         </div>
 
@@ -7859,6 +7858,10 @@
     const pickBtn = root.querySelector('#cc-pick');
     const pickLbl = root.querySelector('#cc-pick-lbl');
     const errEl = root.querySelector('#cc-error');
+    const countrySel = root.querySelector('#cc-country');
+    const hintEl = root.querySelector('#cc-suggest-hint');
+    let userLockedCountry = false;
+    let lastSuggestKey = '';
 
     fromSel.value = 'wgs84';
     // Prefer the national CRS of the selected country when available.
@@ -7867,16 +7870,6 @@
     toSel.value = (countryCrs[0] && countryCrs[0].id) || 'lambert-maroc-1';
     if (![...toSel.options].some((o) => o.value === toSel.value)) {
       toSel.value = fromSel.value;
-    }
-
-    if (ui._pendingPickResult) {
-      const pending = ui._pendingPickResult;
-      ui._pendingPickResult = null;
-      fromSel.value = pending.fromCrs;
-      setTimeout(() => {
-        if (aIn) aIn.value = pending.a || '';
-        if (bIn) bIn.value = pending.b || '';
-      }, 0);
     }
 
     function crsMeta(id) {
@@ -7888,8 +7881,19 @@
       })();
     }
 
-    function refillCrsSelects(keepFrom, keepTo) {
-      const country = (root.querySelector('#cc-country') || {}).value || preferredCrsCountry || 'MA';
+    function setSuggestHint(text, kind) {
+      if (!hintEl) return;
+      hintEl.textContent = text || 'Pays et projection sont suggérés automatiquement selon le point (carte ou saisie) — vous pouvez les changer.';
+      hintEl.style.color = kind === 'ok' ? 'var(--brand)'
+        : kind === 'warn' ? 'var(--warning, #e6b35a)'
+        : 'var(--ink-2)';
+    }
+
+    function refillCrsSelects(keepFrom, keepTo, countryCode) {
+      const country = countryCode
+        || (countrySel && countrySel.value)
+        || preferredCrsCountry
+        || 'MA';
       const html = crsOptionsHtml(null, country);
       const prevFrom = keepFrom || fromSel.value;
       const prevTo = keepTo || toSel.value;
@@ -7906,6 +7910,86 @@
         toSel.value = firstProjected ? firstProjected.value : fromSel.value;
       }
       updateLabels();
+    }
+
+    /** Suggest country + default projected CRS for a WGS84 point. */
+    function applyLocationSuggestion(lng, lat, opts) {
+      opts = opts || {};
+      if (!isFinite(lng) || !isFinite(lat)) return null;
+      const key = lng.toFixed(4) + ',' + lat.toFixed(4);
+      if (!opts.fromPick && !opts.force && key === lastSuggestKey) return null;
+      let suggestion;
+      try { suggestion = AtlasCRS.suggestForLocation(lat, lng); }
+      catch (_) { return null; }
+      if (!suggestion || !suggestion.country) return null;
+
+      if (userLockedCountry && !opts.fromPick && !opts.force) {
+        setSuggestHint(
+          'Suggestion disponible (' + suggestion.countryName + ') — pays verrouillé manuellement.',
+          'warn'
+        );
+        return suggestion;
+      }
+
+      lastSuggestKey = key;
+      preferredCrsCountry = suggestion.country;
+      try { localStorage.setItem('hydraulic-gis:crs-country:v1', preferredCrsCountry); } catch (_) {}
+      if (countrySel) countrySel.value = suggestion.country;
+
+      const wantTo = (suggestion.crs && suggestion.crs.id) || null;
+      refillCrsSelects(
+        opts.forceFromWgs84 ? 'wgs84' : fromSel.value,
+        wantTo,
+        suggestion.country
+      );
+      if (opts.forceFromWgs84) fromSel.value = 'wgs84';
+      if (wantTo && [...toSel.options].some((o) => o.value === wantTo)) toSel.value = wantTo;
+      updateLabels();
+
+      const conf = suggestion.confidence >= 0.8 ? 'ok' : 'warn';
+      const crsLabel = suggestion.crs ? suggestion.crs.label : '—';
+      setSuggestHint(
+        'Détecté : ' + suggestion.countryName
+          + ' · projection proposée « ' + crsLabel + ' »'
+          + (suggestion.confidence < 0.7 ? ' (incertitude — vérifiez)' : '')
+          + ' — modifiable.',
+        conf
+      );
+      return suggestion;
+    }
+
+    function suggestFromCurrentInputs() {
+      try {
+        const inp = readCoordPairFromUi(fromSel.value, aIn.value, bIn.value);
+        if (!inp) return;
+        const wgs = coordsToWgs84(inp, fromSel.value);
+        if (!wgs || !isFinite(wgs[0]) || !isFinite(wgs[1])) return;
+        if (Math.abs(wgs[1]) > 90 || Math.abs(wgs[0]) > 180) return;
+        applyLocationSuggestion(wgs[0], wgs[1], { forceFromWgs84: false });
+      } catch (_) {}
+    }
+
+    if (ui._pendingPickResult) {
+      const pending = ui._pendingPickResult;
+      ui._pendingPickResult = null;
+      userLockedCountry = false;
+      if (pending.lng != null && pending.lat != null) {
+        applyLocationSuggestion(pending.lng, pending.lat, {
+          fromPick: true,
+          forceFromWgs84: true,
+          force: true,
+        });
+      }
+      if (pending.fromCrs && [...fromSel.options].some((o) => o.value === pending.fromCrs)) {
+        fromSel.value = pending.fromCrs;
+      } else {
+        fromSel.value = 'wgs84';
+      }
+      updateLabels();
+      setTimeout(() => {
+        if (aIn) aIn.value = pending.a || '';
+        if (bIn) bIn.value = pending.b || '';
+      }, 0);
     }
 
     function updateLabels() {
@@ -7927,13 +8011,32 @@
     updateLabels();
     fromSel.addEventListener('change', updateLabels);
 
-    const countrySel = root.querySelector('#cc-country');
     if (countrySel) {
       countrySel.addEventListener('change', () => {
+        userLockedCountry = true;
         preferredCrsCountry = countrySel.value;
         try { localStorage.setItem('hydraulic-gis:crs-country:v1', preferredCrsCountry); } catch (_) {}
-        refillCrsSelects('wgs84', null);
+        refillCrsSelects('wgs84', null, preferredCrsCountry);
+        const name = (AtlasCRS.listCountries().find((c) => c.code === preferredCrsCountry) || {}).name
+          || preferredCrsCountry;
+        setSuggestHint('Pays choisi manuellement : ' + name + ' — un nouveau point sur la carte recalculera la suggestion.', 'warn');
       });
+    }
+
+    let suggestTimer = null;
+    const scheduleSuggestFromInputs = () => {
+      clearTimeout(suggestTimer);
+      suggestTimer = setTimeout(suggestFromCurrentInputs, 350);
+    };
+    if (aIn) {
+      aIn.addEventListener('blur', suggestFromCurrentInputs);
+      aIn.addEventListener('change', scheduleSuggestFromInputs);
+      aIn.addEventListener('input', scheduleSuggestFromInputs);
+    }
+    if (bIn) {
+      bIn.addEventListener('blur', suggestFromCurrentInputs);
+      bIn.addEventListener('change', scheduleSuggestFromInputs);
+      bIn.addEventListener('input', scheduleSuggestFromInputs);
     }
 
     const utmBtn = root.querySelector('#cc-utm');
@@ -7945,7 +8048,6 @@
           const c = map.getCenter();
           lng = c.lng; lat = c.lat;
         } catch (_) {}
-        // Prefer the typed / last converted WGS84 point when available.
         try {
           const wgs = resolveFlyWgs84();
           if (wgs) { lng = wgs[0]; lat = wgs[1]; }
@@ -7954,12 +8056,12 @@
           errEl.textContent = 'Position indisponible pour calculer l’UTM.';
           return;
         }
+        applyLocationSuggestion(lng, lat, { force: true });
         const utm = ensureUtmForLngLat(lng, lat);
         if (!utm) {
           errEl.textContent = 'Impossible de générer la zone UTM.';
           return;
         }
-        // Inject into both selects even if outside the country filter.
         [fromSel, toSel].forEach((sel) => {
           if (![...sel.options].some((o) => o.value === utm.id)) {
             const opt = document.createElement('option');
@@ -8052,11 +8154,15 @@
       };
       const onClick = (e) => {
         const { lng, lat } = e.lngLat;
-        const c = crsMeta(fromSel.value) || CRS_BY_ID[fromSel.value];
-        if (!c) return;
-        const xy = c.isGeographic ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
-        const fields = formatCoordFieldsForCrs(c.id, xy);
-        ui._pendingPickResult = { a: fields.a, b: fields.b, fromCrs: fromSel.value };
+        // Map pick is always WGS84; country/CRS are suggested when the panel reopens.
+        const fields = formatCoordFieldsForCrs('wgs84', [lng, lat]);
+        ui._pendingPickResult = {
+          a: fields.a,
+          b: fields.b,
+          fromCrs: 'wgs84',
+          lng,
+          lat,
+        };
         lastCoordFlyTarget = [lng, lat];
         pickModeOff = null;
         pickModeAbort = null;
@@ -8137,6 +8243,9 @@
 
     root.querySelector('#cc-convert').addEventListener('click', () => {
       errEl.textContent = '';
+      // If the typed point is elsewhere (e.g. Spain while lists still say Morocco),
+      // refresh country/CRS suggestions first — unless the user locked the country.
+      suggestFromCurrentInputs();
       const inp = parseInputs();
       if (!inp) { errEl.textContent = 'Coordonnées invalides — vérifiez le format.'; return; }
       const out = reproject(inp, fromSel.value, toSel.value);

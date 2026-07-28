@@ -51,4 +51,13 @@ assert(near[0].epsg === 26191, 'location+country prefers Zone 1');
 const ui = CRS.listForUi({ country: 'MA' });
 assert(ui.some((c) => c.id === 'wgs84') && ui.some((c) => c.id === 'lambert-maroc-1'), 'listForUi MA');
 
+const casablanca = CRS.suggestForLocation(33.5, -7.6);
+assert(casablanca.country === 'MA' && casablanca.crs.epsg === 26191, 'suggest Casablanca → MA Zone1');
+const paris = CRS.suggestForLocation(48.8566, 2.3522);
+assert(paris.country === 'FR' && paris.crs.epsg === 2154, 'suggest Paris → FR Lambert-93');
+const madrid = CRS.suggestForLocation(40.4168, -3.7038);
+assert(madrid.country === 'ES' && [25830, 25829, 25831].includes(madrid.crs.epsg), 'suggest Madrid → ES UTM');
+const agadir = CRS.suggestForLocation(30.4278, -9.5981);
+assert(agadir.country === 'MA' && agadir.crs.epsg === 26192, 'suggest Agadir → MA Zone2');
+
 process.exit(failed ? 1 : 0);

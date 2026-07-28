@@ -605,62 +605,134 @@
     {
       "code": "MA",
       "name": "Maroc",
-      "continent": "AF"
+      "continent": "AF",
+      "bbox": [
+        -17.2,
+        20.8,
+        -0.8,
+        36
+      ]
     },
     {
       "code": "FR",
       "name": "France",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        -5.5,
+        41.2,
+        9.8,
+        51.2
+      ]
     },
     {
       "code": "ES",
       "name": "Espagne",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        -9.4,
+        35.9,
+        4.4,
+        43.9
+      ]
     },
     {
       "code": "DZ",
       "name": "Algérie",
-      "continent": "AF"
+      "continent": "AF",
+      "bbox": [
+        -8.7,
+        18.9,
+        12,
+        37.2
+      ]
     },
     {
       "code": "TN",
       "name": "Tunisie",
-      "continent": "AF"
+      "continent": "AF",
+      "bbox": [
+        7.5,
+        30.2,
+        11.6,
+        37.5
+      ]
     },
     {
       "code": "PT",
       "name": "Portugal",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        -9.6,
+        36.9,
+        -6.1,
+        42.2
+      ]
     },
     {
       "code": "BE",
       "name": "Belgique",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        2.5,
+        49.4,
+        6.5,
+        51.6
+      ]
     },
     {
       "code": "CH",
       "name": "Suisse",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        5.9,
+        45.8,
+        10.6,
+        47.9
+      ]
     },
     {
       "code": "DE",
       "name": "Allemagne",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        5.8,
+        47.2,
+        15.1,
+        55.1
+      ]
     },
     {
       "code": "IT",
       "name": "Italie",
-      "continent": "EU"
+      "continent": "EU",
+      "bbox": [
+        6.6,
+        36.6,
+        18.6,
+        47.1
+      ]
     },
     {
       "code": "US",
       "name": "États-Unis",
-      "continent": "NA"
+      "continent": "NA",
+      "bbox": [
+        -125,
+        24,
+        -66,
+        50
+      ]
     },
     {
       "code": "XX",
       "name": "Monde / communs",
-      "continent": "WW"
+      "continent": "WW",
+      "bbox": [
+        -180,
+        -90,
+        180,
+        90
+      ]
     }
   ],
   "countryCrs": [
