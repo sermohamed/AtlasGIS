@@ -1,0 +1,53 @@
+[
+  { "country": "XX", "epsg": 4326, "priority": 1 },
+  { "country": "XX", "epsg": 3857, "priority": 2 },
+
+  { "country": "MA", "epsg": 26191, "priority": 1 },
+  { "country": "MA", "epsg": 26192, "priority": 2 },
+  { "country": "MA", "epsg": 26194, "priority": 3 },
+  { "country": "MA", "epsg": 26195, "priority": 4 },
+  { "country": "MA", "epsg": 4326, "priority": 10 },
+  { "country": "MA", "epsg": 3857, "priority": 11 },
+
+  { "country": "FR", "epsg": 2154, "priority": 1 },
+  { "country": "FR", "epsg": 27572, "priority": 2 },
+  { "country": "FR", "epsg": 3949, "priority": 3 },
+  { "country": "FR", "epsg": 4326, "priority": 10 },
+  { "country": "FR", "epsg": 3857, "priority": 11 },
+
+  { "country": "ES", "epsg": 25830, "priority": 1 },
+  { "country": "ES", "epsg": 25829, "priority": 2 },
+  { "country": "ES", "epsg": 25831, "priority": 3 },
+  { "country": "ES", "epsg": 23030, "priority": 4 },
+  { "country": "ES", "epsg": 4326, "priority": 10 },
+  { "country": "ES", "epsg": 3857, "priority": 11 },
+
+  { "country": "DZ", "epsg": 30791, "priority": 1 },
+  { "country": "DZ", "epsg": 4326, "priority": 10 },
+
+  { "country": "TN", "epsg": 22332, "priority": 1 },
+  { "country": "TN", "epsg": 4326, "priority": 10 },
+
+  { "country": "PT", "epsg": 3763, "priority": 1 },
+  { "country": "PT", "epsg": 25829, "priority": 2 },
+  { "country": "PT", "epsg": 4326, "priority": 10 },
+
+  { "country": "BE", "epsg": 31370, "priority": 1 },
+  { "country": "BE", "epsg": 3812, "priority": 2 },
+  { "country": "BE", "epsg": 4326, "priority": 10 },
+
+  { "country": "CH", "epsg": 2056, "priority": 1 },
+  { "country": "CH", "epsg": 4326, "priority": 10 },
+
+  { "country": "DE", "epsg": 25832, "priority": 1 },
+  { "country": "DE", "epsg": 25833, "priority": 2 },
+  { "country": "DE", "epsg": 4326, "priority": 10 },
+
+  { "country": "IT", "epsg": 25832, "priority": 1 },
+  { "country": "IT", "epsg": 25833, "priority": 2 },
+  { "country": "IT", "epsg": 4326, "priority": 10 },
+
+  { "country": "US", "epsg": 4269, "priority": 1 },
+  { "country": "US", "epsg": 4326, "priority": 10 },
+  { "country": "US", "epsg": 3857, "priority": 11 }
+]

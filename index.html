@@ -17,8 +17,10 @@
   <link rel="stylesheet" href="vendor/maplibre-gl-terradraw.css" />
   <script src="vendor/maplibre-gl-terradraw.umd.js"></script>
 
-  <!-- proj4 (conversion Lambert ↔ WGS84) -->
+  <!-- proj4 (moteur de transformation) + AtlasCRS (registre / API unique) -->
   <script src="vendor/proj4.js"></script>
+  <script src="crs/atlas-crs.data.js"></script>
+  <script src="crs/atlas-crs.js"></script>
 
   <!-- Turf (calculs géométriques : longueur, surface, etc.) -->
   <script src="vendor/turf.min.js"></script>
@@ -1059,7 +1061,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-28·ai (label rotate + UI)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-28·aj (CRS registry)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1417,29 +1419,74 @@
     } catch (e) { console.warn('placeFlyToMarker failed:', e); }
   }
 
-  /* ═══ 1. PROJECTIONS ════════════════════════════════════════════════════════ */
-  // EPSG:26191 — Merchich / Nord Maroc (Lambert Zone 1)
-  // Paramètres exacts copiés de l'app v49 :
-  //   +proj=lcc +lat_1=33.3 +lat_0=33.3 +lon_0=-5.4 +k_0=0.999625769
-  //   +x_0=500000 +y_0=300000 +ellps=clrk80ign +towgs84=31,146,47,0,0,0,0
-  proj4.defs(
-    'lambert-maroc-1',
-    '+proj=lcc +lat_1=33.3 +lat_0=33.3 +lon_0=-5.4 +k_0=0.999625769 ' +
-    '+x_0=500000 +y_0=300000 +ellps=clrk80ign ' +
-    '+towgs84=31,146,47,0,0,0,0 +units=m +no_defs'
-  );
-  // Also register the EPSG alias used in the original app, in case any
-  // imported file references it.
-  proj4.defs('EPSG:26191', proj4.defs('lambert-maroc-1'));
-  // Register lowercase 'wgs84' as alias for proj4's built-in WGS84 — our app
-  // uses lowercase ID for consistency with the CRS_LIST.
-  proj4.defs('wgs84', proj4.defs('WGS84'));
+  /* ═══ 1. PROJECTIONS (via AtlasCRS) ═════════════════════════════════════════
+     All CRS lookups and transforms go through AtlasCRS. Definitions live in
+     crs/data/*.json (embedded by tools/embed-crs-data.js). Do not add proj4
+     defs or EPSG switches in UI code. */
+  if (!window.AtlasCRS || !AtlasCRS.isReady()) {
+    try {
+      AtlasCRS.bootstrap(window.__ATLAS_CRS_DATA__, window.proj4);
+    } catch (err) {
+      console.error('[AtlasCRS] bootstrap failed:', err);
+    }
+  }
 
-  const CRS_LIST = [
-    { id: 'wgs84', label: 'GPS (WGS84)', isGeographic: true, axes: ['Longitude', 'Latitude'] },
-    { id: 'lambert-maroc-1', label: 'Maroc Lambert Zone 1', isGeographic: false, axes: ['X (Est)', 'Y (Nord)'] },
-  ];
-  const CRS_BY_ID = Object.fromEntries(CRS_LIST.map(c => [c.id, c]));
+  // Preferred country for CRS pickers (persisted lightly on state later).
+  let preferredCrsCountry = 'MA';
+  try {
+    const saved = localStorage.getItem('hydraulic-gis:crs-country:v1');
+    if (saved) preferredCrsCountry = saved;
+  } catch (_) {}
+
+  /** Rebuild the legacy CRS_LIST / CRS_BY_ID views from the registry. */
+  const CRS_LIST = [];
+  const CRS_BY_ID = {};
+  function rebuildCrsCompat(country) {
+    CRS_LIST.length = 0;
+    Object.keys(CRS_BY_ID).forEach((k) => { delete CRS_BY_ID[k]; });
+    const list = AtlasCRS.listForUi({ country: country || null });
+    for (const c of list) {
+      CRS_LIST.push(c);
+      CRS_BY_ID[c.id] = c;
+    }
+  }
+  rebuildCrsCompat(null);
+
+  function crsOptionsHtml(selectedId, country) {
+    const list = country
+      ? AtlasCRS.listForUi({ country })
+      : CRS_LIST;
+    return list.map((c) =>
+      `<option value="${c.id}"${c.id === selectedId ? ' selected' : ''}>${c.label}</option>`
+    ).join('');
+  }
+
+  function countryOptionsHtml(selected) {
+    return AtlasCRS.listCountries().map((c) =>
+      `<option value="${c.code}"${c.code === selected ? ' selected' : ''}>${c.name}</option>`
+    ).join('');
+  }
+
+  function crsIsGeographic(crsId) {
+    const c = CRS_BY_ID[crsId] || AtlasCRS.getCRS(crsId);
+    return !!(c && c.isGeographic);
+  }
+
+  function ensureUtmForLngLat(lng, lat) {
+    try {
+      const utm = AtlasCRS.generateUTM(lat, lng);
+      if (utm && !CRS_BY_ID[utm.id]) {
+        CRS_LIST.push({
+          id: utm.id, epsg: utm.epsg, label: utm.label, name: utm.name,
+          isGeographic: false, axes: utm.axes.slice(), unit: utm.unit, axis_order: utm.axis_order,
+        });
+        CRS_BY_ID[utm.id] = CRS_LIST[CRS_LIST.length - 1];
+      }
+      return utm;
+    } catch (_) {
+      return null;
+    }
+  }
 
   function copyTextToClipboard(text) {
     const s = String(text);
@@ -1478,7 +1525,11 @@
 
   /** Read two UI fields → [x,y] in CRS convention ([lng,lat] for WGS84, [X,Y] for Lambert). */
   function readCoordPairFromUi(crsId, fieldAVal, fieldBVal) {
-    const c = CRS_BY_ID[crsId];
+    let c = CRS_BY_ID[crsId];
+    if (!c) {
+      const d = AtlasCRS.getCRS(crsId);
+      if (d) c = { id: d.id, isGeographic: d.isGeographic, axes: d.axes };
+    }
     if (!c) return null;
     if (c.isGeographic) {
       const lat = parseCoord(fieldAVal);
@@ -1495,7 +1546,11 @@
   }
 
   function formatCoordFieldsForCrs(crsId, xy) {
-    const c = CRS_BY_ID[crsId];
+    let c = CRS_BY_ID[crsId];
+    if (!c) {
+      const d = AtlasCRS.getCRS(crsId);
+      if (d) c = { id: d.id, isGeographic: d.isGeographic, axes: d.axes };
+    }
     if (!c || !xy) return { a: '', b: '' };
     if (c.isGeographic) {
       return { a: xy[1].toFixed(8), b: xy[0].toFixed(8) };
@@ -1581,9 +1636,7 @@
   }
 
   function reproject([x, y], from, to) {
-    if (from === to) return [x, y];
-    const r = proj4(from, to, [x, y]);
-    return [r[0], r[1]];
+    return AtlasCRS.convert([x, y], from, to);
   }
 
   /* ═══ 2. FORMATTERS ═════════════════════════════════════════════════════════ */
@@ -2089,7 +2142,7 @@
     for (const row of rows) {
       let lng, lat;
       try {
-        if (crs === 'wgs84') { lng = row.x; lat = row.y; }
+        if (crsIsGeographic(crs)) { lng = row.x; lat = row.y; }
         else { const r = reproject([row.x, row.y], crs, 'wgs84'); lng = r[0]; lat = r[1]; }
       } catch (_) { skipped++; continue; }
       if (!isFinite(lng) || !isFinite(lat) || Math.abs(lat) > 90 || Math.abs(lng) > 180) { skipped++; continue; }
@@ -2099,7 +2152,7 @@
         try { dkm = turf.distance([prev.lng, prev.lat], [lng, lat], { units: 'kilometers' }); } catch (_) {}
         if (dkm > 100) { skipped++; continue; }
       }
-      const coordTxt = crs === 'wgs84'
+      const coordTxt = crsIsGeographic(crs)
         ? formatWgsPairDisplay(lng, lat, 6)
         : `${formatProjected(row.x, 1)} ; ${formatProjected(row.y, 1)}`;
       const label = row.borne ? `${row.borne} (${coordTxt})` : coordTxt;
@@ -6596,8 +6649,7 @@
           </p>
           <label class="field-label" style="font-size:11px;">Système de coordonnées</label>
           <select id="bn-crs" class="field" style="margin-bottom:8px;">
-            <option value="wgs84">GPS décimal (WGS84)</option>
-            <option value="lambert-maroc-1">Maroc Lambert Zone 1</option>
+            ${crsOptionsHtml((state._bornage && state._bornage.crs) || 'wgs84', preferredCrsCountry || 'MA')}
           </select>
           <div style="display:flex; gap:8px; align-items:flex-end;">
             <div style="flex:1;">
@@ -6705,7 +6757,7 @@
         msgEl.style.color = kind === 'err' ? 'var(--danger)' : kind === 'ok' ? 'var(--success)' : 'var(--ink-1)';
       };
       const updateLabels = () => {
-        const geo = state._bornage.crs === 'wgs84';
+        const geo = crsIsGeographic(state._bornage.crs);
         const xl = root.querySelector('#bn-x-label');
         const yl = root.querySelector('#bn-y-label');
         if (xl) xl.textContent = geo ? 'Longitude' : 'X (Est)';
@@ -6751,7 +6803,7 @@
         if (x === null || y === null) { showMsg('Coordonnées invalides. Vérifiez la saisie.', 'err'); return; }
         let lng, lat;
         try {
-          if (crs === 'wgs84') { lng = x; lat = y; }
+          if (crsIsGeographic(crs)) { lng = x; lat = y; }
           else { const r = reproject([x, y], crs, 'wgs84'); lng = r[0]; lat = r[1]; }
         } catch (e) { showMsg('Conversion de coordonnées impossible.', 'err'); return; }
         if (!isFinite(lng) || !isFinite(lat) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -6767,7 +6819,7 @@
             return;
           }
         }
-        const label = crs === 'wgs84'
+        const label = crsIsGeographic(crs)
           ? formatWgsPairDisplay(lng, lat, 6)
           : `${formatProjected(x, 1)} ; ${formatProjected(y, 1)}`;
         pts.push({ lng, lat, x, y, crs, label });
@@ -7710,9 +7762,19 @@
   // coordHistory hoisted at script top.
 
   function renderCoordinates() {
-    const opts = CRS_LIST.map(c => `<option value="${c.id}">${c.label}</option>`).join('');
+    const country = preferredCrsCountry || 'MA';
+    const opts = crsOptionsHtml(null, country);
     return `
       <div class="stack">
+        <div>
+          <label class="field-label">Pays / région</label>
+          <select id="cc-country" class="field">${countryOptionsHtml(country)}</select>
+          <p style="font-size:11px;color:var(--ink-2);margin:6px 0 0;">
+            Les systèmes proposés viennent du registre CRS (pas de liste codée en dur).
+            UTM est généré dynamiquement selon la position.
+          </p>
+        </div>
+
         <div>
           <label class="field-label">Système source</label>
           <select id="cc-from" class="field">${opts}</select>
@@ -7735,6 +7797,9 @@
           <button class="btn btn-subtle" id="cc-pick" style="width:100%;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>
             <span id="cc-pick-lbl">Choisir sur la carte</span>
+          </button>
+          <button class="btn btn-ghost" id="cc-utm" style="width:100%; font-size:12px;">
+            Ajouter l’UTM de la carte / du point
           </button>
         </div>
 
@@ -7796,7 +7861,13 @@
     const errEl = root.querySelector('#cc-error');
 
     fromSel.value = 'wgs84';
-    toSel.value = 'lambert-maroc-1';
+    // Prefer the national CRS of the selected country when available.
+    const countryCrs = AtlasCRS.getCRSByCountry(preferredCrsCountry || 'MA')
+      .filter((d) => d.epsg !== 4326 && d.epsg !== 3857);
+    toSel.value = (countryCrs[0] && countryCrs[0].id) || 'lambert-maroc-1';
+    if (![...toSel.options].some((o) => o.value === toSel.value)) {
+      toSel.value = fromSel.value;
+    }
 
     if (ui._pendingPickResult) {
       const pending = ui._pendingPickResult;
@@ -7808,8 +7879,38 @@
       }, 0);
     }
 
+    function crsMeta(id) {
+      return CRS_BY_ID[id] || (() => {
+        const d = AtlasCRS.getCRS(id);
+        return d ? {
+          id: d.id, label: d.label, isGeographic: d.isGeographic, axes: d.axes,
+        } : null;
+      })();
+    }
+
+    function refillCrsSelects(keepFrom, keepTo) {
+      const country = (root.querySelector('#cc-country') || {}).value || preferredCrsCountry || 'MA';
+      const html = crsOptionsHtml(null, country);
+      const prevFrom = keepFrom || fromSel.value;
+      const prevTo = keepTo || toSel.value;
+      fromSel.innerHTML = html;
+      toSel.innerHTML = html;
+      if ([...fromSel.options].some((o) => o.value === prevFrom)) fromSel.value = prevFrom;
+      else fromSel.value = 'wgs84';
+      if ([...toSel.options].some((o) => o.value === prevTo)) toSel.value = prevTo;
+      else {
+        const firstProjected = [...toSel.options].find((o) => {
+          const m = crsMeta(o.value);
+          return m && !m.isGeographic;
+        });
+        toSel.value = firstProjected ? firstProjected.value : fromSel.value;
+      }
+      updateLabels();
+    }
+
     function updateLabels() {
-      const c = CRS_BY_ID[fromSel.value];
+      const c = crsMeta(fromSel.value);
+      if (!c) return;
       if (c.isGeographic) {
         aLbl.textContent = 'Latitude';
         bLbl.textContent = 'Longitude';
@@ -7825,6 +7926,57 @@
     }
     updateLabels();
     fromSel.addEventListener('change', updateLabels);
+
+    const countrySel = root.querySelector('#cc-country');
+    if (countrySel) {
+      countrySel.addEventListener('change', () => {
+        preferredCrsCountry = countrySel.value;
+        try { localStorage.setItem('hydraulic-gis:crs-country:v1', preferredCrsCountry); } catch (_) {}
+        refillCrsSelects('wgs84', null);
+      });
+    }
+
+    const utmBtn = root.querySelector('#cc-utm');
+    if (utmBtn) {
+      utmBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        let lng, lat;
+        try {
+          const c = map.getCenter();
+          lng = c.lng; lat = c.lat;
+        } catch (_) {}
+        // Prefer the typed / last converted WGS84 point when available.
+        try {
+          const wgs = resolveFlyWgs84();
+          if (wgs) { lng = wgs[0]; lat = wgs[1]; }
+        } catch (_) {}
+        if (!isFinite(lng) || !isFinite(lat)) {
+          errEl.textContent = 'Position indisponible pour calculer l’UTM.';
+          return;
+        }
+        const utm = ensureUtmForLngLat(lng, lat);
+        if (!utm) {
+          errEl.textContent = 'Impossible de générer la zone UTM.';
+          return;
+        }
+        // Inject into both selects even if outside the country filter.
+        [fromSel, toSel].forEach((sel) => {
+          if (![...sel.options].some((o) => o.value === utm.id)) {
+            const opt = document.createElement('option');
+            opt.value = utm.id;
+            opt.textContent = utm.label;
+            sel.appendChild(opt);
+          }
+        });
+        toSel.value = utm.id;
+        errEl.textContent = '';
+        const hint = root.querySelector('#cc-result');
+        if (hint) {
+          hint.style.display = 'block';
+          hint.innerHTML = `<div style="font-size:12px;color:var(--ink-1);">Zone UTM ajoutée : <strong>${escapeHtml(utm.label)}</strong> (lon ${lng.toFixed(4)}, lat ${lat.toFixed(4)}).</div>`;
+        }
+      });
+    }
 
     function parseInputs() {
       return readCoordPairFromUi(fromSel.value, aIn.value, bIn.value);
@@ -7900,8 +8052,9 @@
       };
       const onClick = (e) => {
         const { lng, lat } = e.lngLat;
-        const c = CRS_BY_ID[fromSel.value];
-        const xy = c.id === 'wgs84' ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
+        const c = crsMeta(fromSel.value) || CRS_BY_ID[fromSel.value];
+        if (!c) return;
+        const xy = c.isGeographic ? [lng, lat] : reproject([lng, lat], 'wgs84', c.id);
         const fields = formatCoordFieldsForCrs(c.id, xy);
         ui._pendingPickResult = { a: fields.a, b: fields.b, fromCrs: fromSel.value };
         lastCoordFlyTarget = [lng, lat];
@@ -8108,14 +8261,13 @@
     return `
       <div class="stack">
         <p style="font-size:12px; color:var(--ink-1); margin:0;">
-          Saisissez des coordonnées WGS84 (lat, lon) ou Lambert Maroc (X, Y) — la carte sera centrée sur ce point.
+          Saisissez des coordonnées dans le système choisi — la carte sera centrée sur ce point.
         </p>
 
         <div>
           <label class="field-label">Système</label>
           <select id="sr-crs" class="field">
-            <option value="wgs84">GPS (WGS84) — lat, lon</option>
-            <option value="lambert-maroc-1">Maroc Lambert Zone 1 — X, Y</option>
+            ${crsOptionsHtml('wgs84', preferredCrsCountry || 'MA')}
           </select>
         </div>
 
@@ -8181,14 +8333,13 @@
       if (isNaN(b)) { errEl.textContent = `« ${parts[1]} » n'est pas un nombre valide.`; return; }
 
       let lng, lat;
-      if (crsSel.value === 'wgs84') {
+      if (crsIsGeographic(crsSel.value)) {
         const parsed = parseWgsInputPair(a, b);
         if (!parsed) { errEl.textContent = 'Coordonnées invalides.'; return; }
         lng = parsed.lng;
         lat = parsed.lat;
       } else {
-        // Lambert: a=X, b=Y
-        const wgs = reproject([a, b], 'lambert-maroc-1', 'wgs84');
+        const wgs = reproject([a, b], crsSel.value, 'wgs84');
         lng = wgs[0]; lat = wgs[1];
       }
 
@@ -8201,7 +8352,8 @@
       map.flyTo({ center: [lng, lat], zoom: Math.min(13, map.getMaxZoom()), essential: true });
 
       // Add to history
-      searchHistory.unshift({ input: raw, crs: CRS_BY_ID[crsSel.value].label, ts: Date.now() });
+      const crsLabel = (CRS_BY_ID[crsSel.value] || AtlasCRS.getCRS(crsSel.value) || {}).label || crsSel.value;
+      searchHistory.unshift({ input: raw, crs: crsLabel, ts: Date.now() });
       searchHistory = searchHistory.slice(0, 8);
       // renderSearch is the only reader, so without this the new entry stayed
       // invisible until the user switched panels and came back.

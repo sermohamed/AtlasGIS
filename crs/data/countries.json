@@ -1,0 +1,14 @@
+[
+  { "code": "MA", "name": "Maroc", "continent": "AF" },
+  { "code": "FR", "name": "France", "continent": "EU" },
+  { "code": "ES", "name": "Espagne", "continent": "EU" },
+  { "code": "DZ", "name": "Algérie", "continent": "AF" },
+  { "code": "TN", "name": "Tunisie", "continent": "AF" },
+  { "code": "PT", "name": "Portugal", "continent": "EU" },
+  { "code": "BE", "name": "Belgique", "continent": "EU" },
+  { "code": "CH", "name": "Suisse", "continent": "EU" },
+  { "code": "DE", "name": "Allemagne", "continent": "EU" },
+  { "code": "IT", "name": "Italie", "continent": "EU" },
+  { "code": "US", "name": "États-Unis", "continent": "NA" },
+  { "code": "XX", "name": "Monde / communs", "continent": "WW" }
+]
