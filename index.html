@@ -374,7 +374,7 @@
       #td-hud { top: 76px; left: 12px; right: 12px; min-width: 0; }
     }
 
-    /* ═════ MOBILE FAB ═════ */
+    /* ═════ MOBILE FAB (floating, drag it anywhere) ═════ */
     #fab {
       display: flex;
       position: fixed; right: 16px; z-index: 30;
@@ -382,12 +382,20 @@
       width: 56px; height: 56px;
       border-radius: 28px;
       background: var(--brand); color: white;
-      border: none; cursor: pointer;
+      border: none; cursor: grab;
       align-items: center; justify-content: center;
       box-shadow: 0 4px 16px rgba(0,0,0,0.5);
       transition: transform 0.1s;
+      touch-action: none;
+      -webkit-user-select: none; user-select: none;
     }
     #fab:active { transform: scale(0.95); }
+    #fab.is-dragging {
+      cursor: grabbing;
+      transition: none;
+      transform: scale(1.08);
+      box-shadow: 0 8px 26px rgba(0,0,0,0.6);
+    }
     #fab .badge {
       position: absolute; top: -2px; right: -2px;
       min-width: 20px; height: 20px; padding: 0 6px;
@@ -488,6 +496,37 @@
       border-radius: 6px;
       padding: 12px;
     }
+
+    /* Collapsible section, used to keep the geometric tools panel compact. */
+    .acc {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .acc > summary {
+      list-style: none;
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 12px;
+      cursor: pointer;
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--ink-1);
+      -webkit-user-select: none; user-select: none;
+    }
+    .acc > summary::-webkit-details-marker { display: none; }
+    .acc > summary:hover { background: var(--bg-3); color: var(--ink-0); }
+    .acc[open] > summary { color: var(--ink-0); border-bottom: 1px solid var(--line); }
+    .acc-caret { flex: none; color: var(--ink-2); transition: transform 0.15s ease; }
+    .acc[open] > summary .acc-caret { transform: rotate(90deg); }
+    .acc-tag {
+      margin-left: auto; flex: none;
+      font-size: 10px; font-weight: 500;
+      text-transform: none; letter-spacing: 0;
+      color: var(--ink-2);
+    }
+    .acc-tag.ready { color: var(--brand); }
+    .acc-body { padding: 12px; }
 
     .field-label {
       display: block;
@@ -673,18 +712,50 @@
     }
     #draw-defaults { position: relative; }
 
-    .label-drag-handle {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: #fbc412;
-      border: 2px solid #0b0f14;
-      box-shadow: 0 0 0 3px rgba(251,196,18,0.45), 0 2px 8px rgba(0,0,0,0.5);
-      cursor: grab;
+    /* Label handle: a move puck (drag to reposition the label) with a rotate
+       knob clipped to its upper-right (drag to spin the label, tap to reset). */
+    .label-handle {
+      position: relative;
+      width: 30px; height: 30px;
       touch-action: none;
       pointer-events: auto;
     }
-    .label-drag-handle:active { cursor: grabbing; transform: scale(1.08); }
+    .label-handle .lh-move,
+    .label-handle .lh-rot {
+      position: absolute;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      border: 2px solid #0b0f14;
+      color: #0b0f14;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+      touch-action: none;
+    }
+    .label-handle .lh-move {
+      inset: 0;
+      background: #fbc412;
+      cursor: move;
+    }
+    .label-handle .lh-rot {
+      top: -9px; right: -11px;
+      width: 20px; height: 20px;
+      background: #3aa0ff;
+      color: #06121f;
+      cursor: grab;
+    }
+    .label-handle .lh-rot:active { cursor: grabbing; }
+    .label-handle.is-rotating .lh-move { background: #ffd75e; }
+    .label-handle .lh-deg {
+      position: absolute;
+      left: 50%; top: -30px;
+      transform: translateX(-50%);
+      padding: 2px 6px; border-radius: 6px;
+      background: #0b0f14; color: #fff;
+      border: 1px solid #3aa0ff;
+      font: 600 11px/1 'JetBrains Mono', ui-monospace, monospace;
+      white-space: nowrap;
+      display: none;
+    }
+    .label-handle.is-rotating .lh-deg { display: block; }
 
     /* Long-press feedback while editing vertices: red = delete a vertex,
        blue = insert one on the segment. The ring fills over --hold-ms. */
@@ -988,7 +1059,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-27·ah (edit+labels+contours)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-28·ai (label rotate + UI)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1163,8 +1234,8 @@
         </div>
       </div>
 
-      <!-- Mobile FAB -->
-      <button id="fab" aria-label="Ouvrir les outils" onclick="ui.openMenu()">
+      <!-- Mobile FAB — floating, draggable (see makeFabDraggable) -->
+      <button id="fab" aria-label="Ouvrir les outils" title="Menu · glisser pour déplacer le bouton">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
           <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
         </svg>
@@ -1715,11 +1786,10 @@
       log.warn('[HydraulicGIS] syncSelectionHighlight failed:', err);
     }
   }
-  // Labels and their leader lines must always sit on top of the terra-draw
-  // layers, which get (re)created at the top of the stack while drawing.
+  // Labels must always sit on top of the terra-draw layers, which get
+  // (re)created at the top of the stack while drawing.
   function raiseLabelLayers() {
     try {
-      if (map.getLayer('app-label-leader')) map.moveLayer('app-label-leader');
       if (map.getLayer('app-label')) map.moveLayer('app-label');
     } catch (_) {}
   }
@@ -1760,6 +1830,7 @@
           ? f.labelAnchor.slice() : null,
         labelOffset: (f.labelOffset && isFinite(f.labelOffset.distM) && isFinite(f.labelOffset.bearing))
           ? { distM: f.labelOffset.distM, bearing: f.labelOffset.bearing } : null,
+        labelRotation: isFinite(f.labelRotation) ? Number(f.labelRotation) : 0,
         metrics: f.metrics || computeMetrics(geojson, kind),
         createdAt: f.createdAt || now,
         updatedAt: f.updatedAt || now,
@@ -2738,7 +2809,8 @@
     if (map.getSource(SRC_LABELS) && map.getLayer('app-label')
         && map.getSource('app-selection') && map.getLayer('app-selection-line')) return;
 
-    // Clean partial state.
+    // Clean partial state. app-label-leader is a layer from older builds: it
+    // has to stay in this list so a stale style never keeps it alive.
     for (const id of ['app-label', 'app-label-leader']) {
       if (map.getLayer(id)) { try { map.removeLayer(id); } catch (_) {} }
     }
@@ -2793,24 +2865,8 @@
     // rendered by terra-draw (td-point, td-linestring, td-polygon). This
     // keeps the mobile draw experience simple and bug-free: terra-draw is
     // the sole renderer and there's no double-buffering or filter dance.
-    // Leader line: when a label is dragged away from its object, this thin
-    // line keeps the two visually tied together (same source as the labels,
-    // so both always update in one setData).
-    map.addLayer({
-      id: 'app-label-leader', type: 'line', source: SRC_LABELS,
-      filter: ['==', ['geometry-type'], 'LineString'],
-      layout: { 'line-cap': 'round' },
-      paint: {
-        'line-color': '#f7b955',
-        'line-width': 1.2,
-        'line-opacity': 0.85,
-        'line-dasharray': [2, 2],
-      },
-    });
-
     map.addLayer({
       id: 'app-label', type: 'symbol', source: SRC_LABELS,
-      filter: ['==', ['geometry-type'], 'Point'],
       layout: {
         'text-field': ['get', 'name'],
         // Use a map glyph stack that is actually available across basemaps.
@@ -2819,6 +2875,11 @@
         // Minimal offset: label sits very close to the geometry centroid.
         'text-offset': [0, 0.6],
         'text-anchor': 'top',
+        // User-set orientation, kept in map space so a label stays aligned
+        // with the ground (and with its object) when the map is rotated.
+        'text-rotate': ['coalesce', ['get', 'rotation'], 0],
+        'text-rotation-alignment': 'map',
+        'text-pitch-alignment': 'viewport',
         // Separated anchor positions are computed in code; always show our labels.
         'text-allow-overlap': true,
         'text-ignore-placement': true,
@@ -3002,6 +3063,20 @@
     }
   }
 
+  // Label orientation, in degrees clockwise, expressed in map space so the
+  // label keeps its angle relative to the ground when the map is rotated.
+  function normalizeLabelRotation(deg) {
+    if (!isFinite(deg)) return 0;
+    let d = deg % 360;
+    if (d > 180) d -= 360;
+    if (d <= -180) d += 360;
+    return Math.round(d * 10) / 10;
+  }
+
+  function labelRotationOf(f) {
+    return f && isFinite(f.labelRotation) ? normalizeLabelRotation(f.labelRotation) : 0;
+  }
+
   function separateLabelAnchors(items, minMeters = 55) {
     if (items.length < 2) return;
     items.sort((a, b) => b.priority - a.priority);
@@ -3061,45 +3136,45 @@
         priority: computeLabelPriority(f),
         anchor,
         base,
+        rotation: labelRotationOf(f),
         manual: !!(f.labelOffset && f.labelOffset.distM > 0.5),
         name: (f.name && String(f.name).trim()) ? f.name : nameForKind(f.kind),
       });
     }
     separateLabelAnchors(candidates, 55);
-    const out = [];
-    for (const c of candidates) {
-      out.push({
-        type: 'Feature',
-        id: c.id,
-        geometry: { type: 'Point', coordinates: c.anchor },
-        properties: { id: c.id, name: c.name, priority: c.priority },
-      });
-      // Leader line only once the label sits visibly away from its object.
-      let away = 0;
-      try {
-        away = turf.distance(turf.point(c.base), turf.point(c.anchor), { units: 'meters' });
-      } catch (_) {}
-      if (away > 8) {
-        out.push({
-          type: 'Feature',
-          id: String(c.id) + ':leader',
-          geometry: { type: 'LineString', coordinates: [c.base, c.anchor] },
-          properties: { id: c.id, leader: true },
-        });
-      }
-    }
-    return out;
+    return candidates.map(c => ({
+      type: 'Feature',
+      id: c.id,
+      geometry: { type: 'Point', coordinates: c.anchor },
+      properties: { id: c.id, name: c.name, priority: c.priority, rotation: c.rotation },
+    }));
   }
 
-  function applyLabelFeatures(labelFeatures) {
-    if (!map.isStyleLoaded()) return false;
+  /**
+   * Push the label collection to the map.
+   * `opts.live` is for continuous gestures (dragging or rotating a label): it
+   * skips the ghost-busting rewrite, which is only needed when labels appear
+   * or disappear, and would otherwise cost four setData per pointer move.
+   */
+  function applyLabelFeatures(labelFeatures, opts) {
+    const live = !!(opts && opts.live);
+    // Only *creating* the layers needs a loaded style. Guarding the whole
+    // function on isStyleLoaded() silently dropped updates, because setData
+    // itself makes the style report "not loaded" for a moment — so during a
+    // drag every frame after the first was thrown away.
     if (!map.getSource(SRC_LABELS) || !map.getLayer('app-label')) {
+      if (!map.isStyleLoaded()) return false;
       try { installAppLayers(); } catch (_) { return false; }
     }
     try {
       const src = map.getSource(SRC_LABELS);
       if (!src) return false;
       const list = labelFeatures || [];
+      if (live) {
+        src.setData({ type: 'FeatureCollection', features: list });
+        map.triggerRepaint();
+        return true;
+      }
       // Double-empty + next-frame rewrite: kills MapLibre symbol ghosts on
       // mobile after delete (especially when feature ids are reused).
       src.setData({ type: 'FeatureCollection', features: [] });
@@ -3125,7 +3200,7 @@
     }
   }
 
-  /** Hard wipe of every label overlay (symbol layer + yellow drag handles). */
+  /** Hard wipe of every label overlay (symbol layer + move/rotate handles). */
   function purgeAllLabelOverlays() {
     clearLabelHandleMarkers();
     try {
@@ -3189,15 +3264,111 @@
     } catch (_) {}
   }
 
+  const LABEL_MOVE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<path d="M12 2v20M2 12h20M12 2L9 5m3-3l3 3M12 22l-3-3m3 3l3-3M2 12l3-3m-3 3l3 3M22 12l-3-3m3 3l-3 3"'
+    + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const LABEL_ROT_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<path d="M20 12a8 8 0 11-2.34-5.66" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'
+    + '<path d="M20 3v5h-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  /** Screen angle (deg, clockwise) that a map-space rotation currently shows as. */
+  function labelRotationToScreen(deg) {
+    let b = 0;
+    try { b = map.getBearing() || 0; } catch (_) {}
+    return deg - b;
+  }
+  function screenAngleToLabelRotation(deg) {
+    let b = 0;
+    try { b = map.getBearing() || 0; } catch (_) {}
+    return normalizeLabelRotation(deg + b);
+  }
+
+  /** Rotate knob: drag to spin the label, tap (no drag) to snap back to 0. */
+  function attachLabelRotateKnob(knob, el, id) {
+    const badge = el.querySelector('.lh-deg');
+    let startScreen = 0, startRotation = 0, moved = false, activeId = null;
+
+    const angleFromPointer = (ev) => {
+      const rect = el.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180 / Math.PI;
+    };
+
+    const setRotation = (deg) => {
+      // Resolve the feature every time: reloads and imports swap the objects
+      // in state.features while the marker element survives.
+      const f = state.features.find(x => x.id === id);
+      if (!f) return;
+      f.labelRotation = deg;
+      applyLabelFeatures(buildLabelFeatures(), { live: activeId !== null });
+    };
+
+    const onMove = (ev) => {
+      if (activeId !== null && ev.pointerId !== activeId) return;
+      const delta = angleFromPointer(ev) - startScreen;
+      if (!moved && Math.abs(delta) < 2) return;
+      moved = true;
+      let rot = screenAngleToLabelRotation(labelRotationToScreen(startRotation) + delta);
+      // Soft detents every 15°, so horizontal and square angles are easy to hit.
+      const snapped = Math.round(rot / 15) * 15;
+      if (Math.abs(rot - snapped) < 3.5) rot = normalizeLabelRotation(snapped);
+      if (badge) badge.textContent = Math.round(rot) + '°';
+      setRotation(rot);
+      ev.preventDefault();
+    };
+
+    const finish = (ev) => {
+      if (activeId !== null && ev && ev.pointerId !== undefined && ev.pointerId !== activeId) return;
+      knob.removeEventListener('pointermove', onMove);
+      knob.removeEventListener('pointerup', finish);
+      knob.removeEventListener('pointercancel', finish);
+      try { if (activeId !== null) knob.releasePointerCapture(activeId); } catch (_) {}
+      activeId = null;
+      el.classList.remove('is-rotating');
+      // A tap with no rotation resets the label to its natural orientation.
+      if (!moved) setRotation(0);
+      applyLabelFeatures(buildLabelFeatures());
+      saveState();
+      // No need to restore the geometry-edit mode here: the knob keeps its
+      // pointer events off the canvas, so terra-draw never saw the gesture.
+    };
+
+    const onDown = (ev) => {
+      // Keep the event away from the marker's own drag handler underneath.
+      ev.stopPropagation();
+      ev.preventDefault();
+      activeId = ev.pointerId;
+      startScreen = angleFromPointer(ev);
+      startRotation = labelRotationOf(state.features.find(x => x.id === id));
+      moved = false;
+      el.classList.add('is-rotating');
+      if (badge) badge.textContent = Math.round(startRotation) + '°';
+      try { knob.setPointerCapture(ev.pointerId); } catch (_) {}
+      knob.addEventListener('pointermove', onMove);
+      knob.addEventListener('pointerup', finish);
+      knob.addEventListener('pointercancel', finish);
+    };
+
+    knob.addEventListener('pointerdown', onDown);
+    // maplibre's Marker binds these directly on the element it was given.
+    ['mousedown', 'touchstart', 'click'].forEach(type => {
+      knob.addEventListener(type, e => e.stopPropagation());
+    });
+  }
+
   function createLabelHandleMarker(id, anchor) {
-    const f = state.features.find(x => x.id === id);
-    if (!f) return null;
+    if (!state.features.some(x => x.id === id)) return null;
     const el = document.createElement('div');
-    el.className = 'label-drag-handle';
-    el.title = 'Glisser pour déplacer le libellé';
+    el.className = 'label-handle';
+    el.innerHTML = '<div class="lh-deg"></div>'
+      + '<div class="lh-move" title="Glisser pour déplacer le libellé">' + LABEL_MOVE_ICON + '</div>'
+      + '<div class="lh-rot" title="Glisser pour pivoter le libellé · appui simple pour remettre à 0°">'
+      + LABEL_ROT_ICON + '</div>';
     const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
       .setLngLat(anchor)
       .addTo(map);
+    attachLabelRotateKnob(el.querySelector('.lh-rot'), el, id);
     marker.on('dragstart', () => {
       _labelDrag = { active: true, featureId: id, pointerId: null };
       try {
@@ -3210,6 +3381,8 @@
       try { map.dragPan.disable(); } catch (_) {}
     });
     marker.on('drag', () => {
+      const f = state.features.find(x => x.id === id);
+      if (!f) return;
       const ll = marker.getLngLat();
       const base = computeLabelBaseAnchor(f, state.features);
       if (base) {
@@ -3228,10 +3401,11 @@
           if (clamped) marker.setLngLat(clamped);
         }
       }
-      applyLabelFeatures(buildLabelFeatures());
+      applyLabelFeatures(buildLabelFeatures(), { live: true });
     });
     marker.on('dragend', () => {
       _labelDrag = { active: false, featureId: null, pointerId: null };
+      applyLabelFeatures(buildLabelFeatures());
       saveState();
       try { map.dragPan.enable(); } catch (_) {}
       restoreGeomEditAfterLabelDrag();
@@ -4455,8 +4629,7 @@
           const refreshHalo = () => {
             try { if (typeof syncSelectionHighlight === 'function') syncSelectionHighlight(); } catch (_) {}
             try {
-              ['app-selection-fill', 'app-selection-line', 'app-selection-point',
-               'app-label-leader', 'app-label']
+              ['app-selection-fill', 'app-selection-line', 'app-selection-point', 'app-label']
                 .forEach(l => { if (map.getLayer(l)) map.moveLayer(l); });
             } catch (_) {}
             try { map.triggerRepaint(); } catch (_) {}
@@ -6395,14 +6568,28 @@
   }
 
   /* ═══ 10b. PANEL CONTENT — TOOLS (buffer, intersection) ═════════════════════ */
+  // Which tool sections are unfolded. Kept outside the render so the panel can
+  // re-render on every selection change without snapping shut under the user.
+  const toolsOpen = { bornage: true, buffer: false, intersect: false, contour: false };
+  const ACC_CARET = '<svg class="acc-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  /** One collapsible tool section. `tag` is a short right-aligned status. */
+  function accSection(key, title, tag, body) {
+    return `
+      <details class="acc" data-acc="${key}"${toolsOpen[key] ? ' open' : ''}>
+        <summary>${ACC_CARET}<span>${title}</span>${tag ? `<span class="acc-tag${tag.ready ? ' ready' : ''}">${tag.text}</span>` : ''}</summary>
+        <div class="acc-body">${body}</div>
+      </details>`;
+  }
+
   function renderTools() {
     const sel = state.features.filter(f => state.selectedIds.includes(f.id));
     const polys = sel.filter(f => ['polygon', 'rectangle', 'circle'].includes(f.kind));
+    const bornagePts = (state._bornage && state._bornage.points) ? state._bornage.points.length : 0;
     return `
       <div class="stack">
-        <!-- ─── Bornage tool (polygon by coordinates) ────────────────── -->
-        <div class="surface">
-          <div class="field-label" style="margin-bottom:6px;">Bornage (polygone par coordonnées)</div>
+        ${accSection('bornage', 'Bornage', bornagePts ? { text: `${bornagePts} pt${bornagePts > 1 ? 's' : ''}`, ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
             Saisissez autant de points que voulu, puis « Terminer » relie tous les points en polygone.
             Un point situé à plus de 100&nbsp;km du précédent est refusé (erreur de saisie probable).
@@ -6440,11 +6627,9 @@
           </div>
           <div id="bn-list" style="margin-top:8px;"></div>
           <button class="btn btn-solid" id="bn-finish" style="width:100%; margin-top:10px;">Terminer le polygone</button>
-        </div>
+        `)}
 
-        <!-- ─── Buffer tool ──────────────────────────────────────────── -->
-        <div class="surface">
-          <div class="field-label" style="margin-bottom:6px;">Buffer (zone tampon)</div>
+        ${accSection('buffer', 'Buffer (zone tampon)', sel.length === 1 ? { text: '1 objet', ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
             Crée un nouvel objet polygonal à une distance donnée autour d'un objet sélectionné.
             ${sel.length === 0 ? '<br><strong>Sélectionnez un objet pour commencer.</strong>' : ''}
@@ -6459,11 +6644,9 @@
             <button class="btn btn-solid" id="bf-apply" ${sel.length !== 1 ? 'disabled' : ''}
                     style="white-space:nowrap;">Appliquer</button>
           </div>
-        </div>
+        `)}
 
-        <!-- ─── Intersection tool ──────────────────────────────────── -->
-        <div class="surface">
-          <div class="field-label" style="margin-bottom:6px;">Intersection de polygones</div>
+        ${accSection('intersect', 'Intersection de polygones', polys.length >= 2 ? { text: `${polys.length} polygones`, ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
             Calcule la zone commune (chevauchement) entre 2 polygones sélectionnés et la crée comme nouvel objet.
             ${polys.length === 0 ? "<br><strong>Sélectionnez au moins 2 polygones avec « Sélection multiple ».</strong>"
@@ -6473,11 +6656,9 @@
           <button class="btn btn-solid" id="it-apply" ${polys.length < 2 ? 'disabled' : ''}
                   style="width:100%;">Calculer l'intersection</button>
           <div id="it-result" style="font-size:12px; margin-top:8px;"></div>
-        </div>
+        `)}
 
-        <!-- ─── Contour lines tool ──────────────────────────────────── -->
-        <div class="surface">
-          <div class="field-label" style="margin-bottom:6px;">Courbes de niveau</div>
+        ${accSection('contour', 'Courbes de niveau', polys.length === 1 ? { text: '1 polygone', ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
             Échantillonne l'altitude (Open-Meteo, fallback Open-Elevation) sur le polygone sélectionné et trace les courbes de niveau,
             avec l'altitude écrite le long de chaque courbe.
@@ -6496,12 +6677,16 @@
                     style="white-space:nowrap;">Tracer</button>
           </div>
           <div id="cn-result" style="font-size:12px; margin-top:8px;"></div>
-        </div>
+        `)}
       </div>
     `;
   }
 
   function attachToolsEvents(root) {
+    root.querySelectorAll('details.acc[data-acc]').forEach(d => {
+      d.addEventListener('toggle', () => { toolsOpen[d.dataset.acc] = d.open; });
+    });
+
     // ─── Bornage (polygon by coordinates) ───
     (function bornage() {
       if (!state._bornage) state._bornage = { crs: 'wgs84', points: [] };
@@ -8983,6 +9168,94 @@
       if (dy > 60) ui.closeSheet();
       dy = 0;
     });
+  })();
+
+  /* ═══ 13b. FLOATING MENU BUTTON ═════════════════════════════════════════════
+     The menu button is draggable so it never sits on top of whatever the user
+     is working on. Its position is remembered; a press that doesn't move opens
+     the menu as before. */
+  (function makeFabDraggable() {
+    const fab = document.getElementById('fab');
+    if (!fab) return;
+    const KEY = 'hydraulic-gis:fab-pos:v1';
+    const MARGIN = 8;
+    const DRAG_SLOP = 6;
+    let pointerId = null, grabX = 0, grabY = 0, moved = false;
+
+    const place = (left, top) => {
+      const w = fab.offsetWidth || 56;
+      const h = fab.offsetHeight || 56;
+      const maxL = Math.max(MARGIN, window.innerWidth - w - MARGIN);
+      const maxT = Math.max(MARGIN, window.innerHeight - h - MARGIN);
+      const l = Math.min(Math.max(left, MARGIN), maxL);
+      const t = Math.min(Math.max(top, MARGIN), maxT);
+      fab.style.left = l + 'px';
+      fab.style.top = t + 'px';
+      fab.style.right = 'auto';
+      fab.style.bottom = 'auto';
+      return { left: l, top: t };
+    };
+
+    const restore = () => {
+      // offsetWidth is 0 while the button is hidden (desktop): leave the CSS
+      // default in place, we re-run this when the viewport grows a button.
+      if (!fab.offsetWidth) return;
+      try {
+        const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+        if (saved && isFinite(saved.left) && isFinite(saved.top)) place(saved.left, saved.top);
+      } catch (_) {}
+    };
+
+    fab.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      pointerId = e.pointerId;
+      moved = false;
+      const r = fab.getBoundingClientRect();
+      grabX = e.clientX - r.left;
+      grabY = e.clientY - r.top;
+      try { fab.setPointerCapture(pointerId); } catch (_) {}
+    });
+
+    fab.addEventListener('pointermove', (e) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      const r = fab.getBoundingClientRect();
+      if (!moved
+          && Math.abs(e.clientX - r.left - grabX) < DRAG_SLOP
+          && Math.abs(e.clientY - r.top - grabY) < DRAG_SLOP) return;
+      moved = true;
+      fab.classList.add('is-dragging');
+      place(e.clientX - grabX, e.clientY - grabY);
+      e.preventDefault();
+    });
+
+    const release = (e) => {
+      if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
+      try { fab.releasePointerCapture(pointerId); } catch (_) {}
+      pointerId = null;
+      fab.classList.remove('is-dragging');
+      if (moved) {
+        const r = fab.getBoundingClientRect();
+        try { localStorage.setItem(KEY, JSON.stringify({ left: r.left, top: r.top })); } catch (_) {}
+      }
+    };
+    fab.addEventListener('pointerup', release);
+    fab.addEventListener('pointercancel', release);
+
+    // A drag must not also open the menu.
+    fab.addEventListener('click', (e) => {
+      if (moved) { moved = false; e.preventDefault(); e.stopPropagation(); return; }
+      ui.openMenu();
+    });
+
+    // Keep the button reachable when the viewport changes (rotation, keyboard).
+    const reclamp = () => {
+      if (!fab.offsetWidth) return;
+      if (fab.style.left) place(parseFloat(fab.style.left), parseFloat(fab.style.top));
+      else restore();
+    };
+    window.addEventListener('resize', reclamp);
+    window.addEventListener('orientationchange', reclamp);
+    restore();
   })();
 
   /* ═══ 14. EVENT LISTENERS ═══════════════════════════════════════════════════ */
