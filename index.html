@@ -108,18 +108,42 @@
     }
 
     #sidebar-rail .brand {
-      width: 40px; height: 40px;
-      margin: 0 auto 8px;
+      width: 48px;
+      margin: 4px auto 10px;
+      padding: 6px 2px 8px;
       border-radius: 8px;
       background: var(--bg-2);
       border: 1px solid var(--line);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 4px;
+      text-align: center;
+      cursor: default;
+      user-select: none;
+    }
+    #sidebar-rail .brand .brand-mark {
+      width: 28px; height: 28px;
       display: flex; align-items: center; justify-content: center;
+    }
+    #sidebar-rail .brand .brand-name {
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      line-height: 1.1;
+      color: var(--ink-0);
+      text-transform: uppercase;
+    }
+    #sidebar-rail .brand .brand-by {
+      font-size: 7px;
+      line-height: 1.15;
+      color: var(--ink-2);
+      max-width: 46px;
     }
 
     #sidebar-rail .divider {
       height: 1px; background: var(--line);
       margin: 0 8px 4px;
     }
+    #sidebar-rail .rail-spacer { flex: 1; min-height: 8px; }
 
     .rail-btn {
       position: relative;
@@ -513,10 +537,20 @@
       background: rgba(255,255,255,0.2); border-radius: 2px;
     }
     .sheet-header {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: flex-start; justify-content: space-between;
       gap: 8px;
     }
+    .sheet-header-text { min-width: 0; flex: 1; }
     .sheet-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .sheet-subtitle {
+      display: none;
+      margin: 2px 0 0;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--ink-2);
+      line-height: 1.2;
+    }
+    .sheet-subtitle.visible { display: block; }
 
     .sheet-body {
       flex: 1 1 auto;
@@ -641,10 +675,19 @@
 
     /* ═════ MENU SHEET ═════ */
     .menu-list {
-      display: flex; flex-direction: column; gap: 6px;
+      display: flex; flex-direction: column; gap: 14px;
       overflow-y: auto;
       padding-right: 4px;
       -webkit-overflow-scrolling: touch;
+    }
+    .menu-group { display: flex; flex-direction: column; gap: 6px; }
+    .menu-group-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-2);
+      padding: 0 2px;
     }
     .menu-item {
       display: flex; align-items: center; gap: 12px;
@@ -662,6 +705,19 @@
     .menu-item:hover { background: var(--bg-3); }
     .menu-item .icon { color: var(--brand); flex-shrink: 0; }
     .menu-item .icon svg { width: 22px; height: 22px; }
+    .about-card .about-kicker {
+      font-size: 11px; color: var(--ink-2); margin: 0 0 6px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .about-card .about-title {
+      margin: 0 0 4px; font-size: 18px; font-weight: 650; color: var(--ink-0);
+    }
+    .about-card .about-by {
+      margin: 0 0 12px; font-size: 13px; color: var(--ink-1);
+    }
+    .about-card p {
+      margin: 0 0 10px; font-size: 13px; color: var(--ink-1); line-height: 1.45;
+    }
 
     /* ═════ LAYERS LIST ═════ */
     .layer-row {
@@ -1219,16 +1275,20 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-29·an (route/legend/labels)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-29·ao (compact UI)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
       <nav id="sidebar-rail">
-        <div class="brand" title="Atlas GIS">
-          <svg width="24" height="24" viewBox="0 0 32 32">
-            <path d="M8 22c2 0 3-2 4-4s2-4 4-4 3 2 4 4 2 4 4 4" stroke="#3aa0ff" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-            <circle cx="16" cy="14" r="2" fill="#3aa0ff"/>
-          </svg>
+        <div class="brand" title="Atlas GIS — par Mohamed SERRAJ">
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 32 32">
+              <path d="M8 22c2 0 3-2 4-4s2-4 4-4 3 2 4 4 2 4 4 4" stroke="#3aa0ff" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+              <circle cx="16" cy="14" r="2" fill="#3aa0ff"/>
+            </svg>
+          </div>
+          <div class="brand-name">Atlas GIS</div>
+          <div class="brand-by">par Mohamed SERRAJ</div>
         </div>
         <div class="divider"></div>
         <button class="rail-btn" data-panel="layers" title="Calques">
@@ -1263,6 +1323,11 @@
         <button class="rail-btn" data-panel="files" title="Import / Export">
           <svg viewBox="0 0 24 24" fill="none"><path d="M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0 M9 17l3-3 3 3 M12 14v6" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
           <span class="lbl">Files</span>
+        </button>
+        <div class="rail-spacer" aria-hidden="true"></div>
+        <button class="rail-btn" data-panel="about" title="About">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 10v6M12 7.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="lbl">About</span>
         </button>
       </nav>
       <div id="sidebar-panel">
@@ -1416,7 +1481,10 @@
     <div class="sheet-handle" id="sheet-handle">
       <div class="sheet-pill"></div>
       <div class="sheet-header">
-        <h2 id="sheet-title">Outils</h2>
+        <div class="sheet-header-text">
+          <h2 id="sheet-title">Outils</h2>
+          <div id="sheet-subtitle" class="sheet-subtitle"></div>
+        </div>
         <button class="panel-close" onclick="ui.closeSheet()" aria-label="Fermer">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
@@ -6183,8 +6251,19 @@
 
       // Render mobile sheet
       if (state.activePanel && (mobile || state.activePanel === 'menu')) {
-        const title = state.activePanel === 'menu' ? t('panel_menu') : panelTitle(state.activePanel);
+        const isMenu = state.activePanel === 'menu';
+        const title = isMenu ? t('app_name') : panelTitle(state.activePanel);
         document.getElementById('sheet-title').textContent = title;
+        const sub = document.getElementById('sheet-subtitle');
+        if (sub) {
+          if (isMenu) {
+            sub.textContent = t('author_by');
+            sub.classList.add('visible');
+          } else {
+            sub.textContent = '';
+            sub.classList.remove('visible');
+          }
+        }
         if (!skipSheetBody) renderPanel('sheet-body', state.activePanel);
         if (mobile) {
           document.getElementById('scrim').classList.add('visible');
@@ -6213,6 +6292,7 @@
       grid: 'panel_grid',
       files: 'panel_files',
       options: 'panel_options',
+      about: 'panel_about',
       menu: 'panel_menu',
     };
     return t(map[id] || id);
@@ -6235,6 +6315,7 @@
     else if (panelId === 'grid') el.innerHTML = renderGrid();
     else if (panelId === 'files') el.innerHTML = renderFiles();
     else if (panelId === 'options') el.innerHTML = renderOptionsPanel();
+    else if (panelId === 'about') el.innerHTML = renderAbout();
     // After innerHTML, attach event listeners
     if (panelId === 'coordinates') attachCoordinatesEvents(el);
     if (panelId === 'search') attachSearchEvents(el);
@@ -6250,24 +6331,59 @@
 
   /* ═══ 7. PANEL CONTENT — MENU (mobile) ══════════════════════════════════════ */
   function renderMenu() {
-    const items = [
-      { id: 'layers', label: t('panel_layers'), icon: 'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 17l9 5 9-5' },
-      { id: 'style', label: t('panel_style'), icon: 'M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z' },
-      { id: 'measure', label: t('panel_measure'), icon: 'M4 6h16M4 12h10M4 18h16' },
-      { id: 'tools', label: t('panel_tools'), icon: 'M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z' },
-      { id: 'coordinates', label: t('panel_coordinates'), icon: 'M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z' },
-      { id: 'search', label: t('panel_search'), icon: 'M11 4a7 7 0 100 14 7 7 0 000-14z M16 16l5 5' },
-      { id: 'files', label: t('panel_files'), icon: 'M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0 M9 17l3-3 3 3 M12 14v6' },
-      { id: 'options', label: t('panel_options'), icon: 'M4 6h16M4 12h16M4 18h10' },
+    const item = (id, label, icon) => `
+      <button class="menu-item" onclick="ui.openSheet('${id}')">
+        <span class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="${icon}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+        <span>${label}</span>
+      </button>`;
+    const groups = [
+      {
+        title: t('menu_project'),
+        items: [
+          { id: 'layers', label: t('panel_layers'), icon: 'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 17l9 5 9-5' },
+          { id: 'style', label: t('panel_style'), icon: 'M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z' },
+          { id: 'measure', label: t('panel_measure'), icon: 'M4 6h16M4 12h10M4 18h16' },
+        ],
+      },
+      {
+        title: t('menu_analysis'),
+        items: [
+          { id: 'tools', label: t('panel_tools'), icon: 'M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z' },
+          { id: 'coordinates', label: t('panel_coordinates'), icon: 'M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z' },
+          { id: 'search', label: t('panel_search'), icon: 'M11 4a7 7 0 100 14 7 7 0 000-14z M16 16l5 5' },
+        ],
+      },
+      {
+        title: t('menu_app'),
+        items: [
+          { id: 'files', label: t('panel_files'), icon: 'M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0 M9 17l3-3 3 3 M12 14v6' },
+          { id: 'options', label: t('panel_options'), icon: 'M4 6h16M4 12h16M4 18h10' },
+          { id: 'about', label: t('panel_about'), icon: 'M12 3a9 9 0 100 18 9 9 0 000-18z M12 10v6 M12 7.5h.01' },
+        ],
+      },
     ];
     return `<div class="menu-list">
-      ${items.map(it => `
-        <button class="menu-item" onclick="ui.openSheet('${it.id}')">
-          <span class="icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="${it.icon}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
-          <span>${it.label}</span>
-        </button>
+      ${groups.map(g => `
+        <div class="menu-group">
+          <div class="menu-group-title">${g.title}</div>
+          ${g.items.map(it => item(it.id, it.label, it.icon)).join('')}
+        </div>
       `).join('')}
     </div>`;
+  }
+
+  function renderAbout() {
+    return `
+      <div class="stack">
+        <div class="surface about-card">
+          <p class="about-kicker">${t('about_product')}</p>
+          <h3 class="about-title">${t('app_name')}</h3>
+          <p class="about-by">${t('author_by')}</p>
+          <p>${t('about_blurb')}</p>
+          <p>${t('about_privacy')}</p>
+          <p style="margin:0; font-size:11px; color:var(--ink-2);">${t('about_build')}</p>
+        </div>
+      </div>`;
   }
 
   /* ═══ 8. PANEL CONTENT — LAYERS ═════════════════════════════════════════════ */
@@ -9981,12 +10097,21 @@
           options: t('panel_options'),
           files: t('panel_files'),
           legend: t('panel_legend'),
+          about: t('panel_about'),
         };
         if (short[id]) lbl.textContent = short[id];
       }
     });
     const fab = document.getElementById('fab');
     if (fab) fab.setAttribute('aria-label', t('fab_menu'));
+    const brand = document.querySelector('#sidebar-rail .brand');
+    if (brand) {
+      brand.title = `${t('app_name')} — ${t('author_by')}`;
+      const nameEl = brand.querySelector('.brand-name');
+      const byEl = brand.querySelector('.brand-by');
+      if (nameEl) nameEl.textContent = t('app_name');
+      if (byEl) byEl.textContent = t('author_by');
+    }
     const ddToggle = document.getElementById('dd-toggle');
     if (ddToggle) {
       ddToggle.title = t('draw_defaults');
