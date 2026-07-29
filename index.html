@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
@@ -21,6 +21,7 @@
   <script src="vendor/proj4.js"></script>
   <script src="crs/atlas-crs.data.js"></script>
   <script src="crs/atlas-crs.js"></script>
+  <script src="i18n.js"></script>
 
   <!-- Turf (calculs géométriques : longueur, surface, etc.) -->
   <script src="vendor/turf.min.js"></script>
@@ -336,8 +337,7 @@
       background: rgba(58,160,255,0.18);
       color: var(--brand);
     }
-    /* Push the MapLibre top-right ctrl (geolocate) below #view-controls
-       (basemap picker + north arrow + zoom extents). */
+    /* Push MapLibre top-right ctrl (geolocate + clean-view) below #view-controls */
     .maplibregl-ctrl-top-right .maplibregl-ctrl-group:first-child {
       margin-top: 124px !important;
     }
@@ -349,6 +349,66 @@
     #vc-north-arrow .north-needle {
       transform-origin: 50% 50%;
       transition: transform 80ms linear;
+    }
+
+    /* Clean / print-preview mode: hide chrome, keep the map + overlays */
+    body.clean-view #rail,
+    body.clean-view #panel,
+    body.clean-view #fab,
+    body.clean-view #sheet,
+    body.clean-view #scrim,
+    body.clean-view #draw-dropdown-wrapper,
+    body.clean-view #draw-defaults,
+    body.clean-view #app-options,
+    body.clean-view #td-hud,
+    body.clean-view #status-bar,
+    body.clean-view #build-badge,
+    body.clean-view #view-controls,
+    body.clean-view .maplibregl-ctrl-top-right .maplibregl-ctrl-group {
+      display: none !important;
+    }
+    body.clean-view #clean-view-exit {
+      display: flex !important;
+    }
+    #clean-view-exit {
+      display: none;
+      position: fixed; top: 12px; right: 12px; z-index: 80;
+      align-items: center; gap: 8px;
+      padding: 8px 12px; border-radius: 8px;
+      background: rgba(11,15,20,0.72); color: #fff;
+      border: 1px solid rgba(255,255,255,0.25);
+      font-size: 12px; cursor: pointer;
+      backdrop-filter: blur(6px);
+    }
+
+    /* Legend overlay: transparent card, draggable + resizable */
+    #legend-box {
+      position: absolute; z-index: 20;
+      background: rgba(11, 15, 20, 0.28);
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 8px;
+      padding: 10px 12px 14px;
+      min-width: 140px; min-height: 60px;
+      max-width: 50vw; max-height: 60vh;
+      overflow: auto;
+      color: var(--ink-0);
+      line-height: 1.4;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+      backdrop-filter: blur(2px);
+      resize: both;
+      cursor: default;
+    }
+    #legend-box .lg-drag {
+      cursor: move;
+      font-weight: 600;
+      color: var(--brand);
+      margin-bottom: 6px;
+      user-select: none;
+      touch-action: none;
+    }
+    #legend-box .lg-group-title {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--ink-2); margin: 8px 0 4px;
     }
 
     /* Status bar (desktop bottom-right cursor coords) */
@@ -642,7 +702,34 @@
       font-size: 11px; padding: 3px 6px;
     }
 
-    /* ─── Draw defaults (inside draw toolbar stack) ─── */
+    /* ─── Draw defaults (inside the draw drawer) + App options (next to draw) ─── */
+    #draw-drawer #draw-defaults {
+      position: static;
+      display: block;
+      width: 100%;
+      max-width: none;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid var(--line);
+      pointer-events: auto;
+    }
+    #draw-drawer #draw-defaults .dd-toggle {
+      width: 100%;
+      height: 36px;
+      border-radius: 6px;
+      justify-content: flex-start;
+      gap: 8px;
+      padding: 0 10px;
+      font-size: 12px;
+    }
+    #draw-drawer #draw-defaults .dd-toggle::after {
+      content: attr(data-label);
+      font-weight: 500;
+    }
+    #draw-drawer #draw-defaults .dd-panel {
+      left: 0; right: 0; top: auto; margin-top: 4px;
+      min-width: 0; width: 100%;
+    }
     #draw-defaults {
       position: static;
       display: flex;
@@ -652,6 +739,11 @@
       pointer-events: none;
       max-width: min(280px, calc(100vw - 120px));
     }
+    #app-options {
+      position: relative;
+      pointer-events: none;
+    }
+    #app-options .dd-toggle,
     #draw-defaults .dd-toggle {
       pointer-events: auto;
       display: flex;
@@ -695,6 +787,22 @@
       pointer-events: auto;
     }
     #draw-defaults.open .dd-panel { display: block; }
+    #app-options .dd-toggle {
+      pointer-events: auto;
+      display: flex; align-items: center; justify-content: center;
+      width: 38px; height: 38px; padding: 0; border-radius: 8px;
+      background: var(--bg-2); border: 1px solid var(--line);
+      color: var(--ink-0); cursor: pointer;
+    }
+    #app-options .dd-panel {
+      pointer-events: auto; display: none; position: absolute;
+      top: 42px; left: 0; min-width: 220px; z-index: 20;
+      background: var(--bg-2); border: 1px solid var(--line-strong);
+      border-radius: 8px; padding: 10px; box-shadow: var(--shadow); font-size: 12px;
+    }
+    #app-options.open .dd-panel { display: block; }
+    #app-options .dd-row { margin-bottom: 8px; }
+    #app-options .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
     #draw-defaults .dd-row { margin-bottom: 8px; }
     #draw-defaults .dd-row:last-child { margin-bottom: 0; }
     #draw-defaults .field-label { font-size: 10px; margin-bottom: 3px; }
@@ -1061,7 +1169,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-28·ak (CRS auto-detect)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-29·al (UI pack)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1094,17 +1202,17 @@
           <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M16 16l5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           <span class="lbl">Aller à</span>
         </button>
-        <button class="rail-btn" data-panel="elevation" title="Profil d'élévation">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M3 18l5-9 4 5 4-7 5 11H3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-          <span class="lbl">Élév.</span>
+        <button class="rail-btn" data-panel="tools" title="Geometry tools">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          <span class="lbl">Tools</span>
         </button>
-        <button class="rail-btn" data-panel="grid" title="Grille">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" stroke="currentColor" stroke-width="2"/></svg>
-          <span class="lbl">Grille</span>
+        <button class="rail-btn" data-panel="options" title="Options">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="lbl">Options</span>
         </button>
-        <button class="rail-btn" data-panel="files" title="Importer / Exporter">
+        <button class="rail-btn" data-panel="files" title="Import / Export">
           <svg viewBox="0 0 24 24" fill="none"><path d="M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0 M9 17l3-3 3 3 M12 14v6" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
-          <span class="lbl">Fichiers</span>
+          <span class="lbl">Files</span>
         </button>
       </nav>
       <div id="sidebar-panel">
@@ -2639,16 +2747,30 @@
       version: 8,
       glyphs: RASTER_GLYPHS,
       sources: {
-        'esri-topo': {
+        // OpenTopoMap first: Esri World_Topo often returns empty tiles
+        // ("Map data not yet available") past ~z15 in many regions.
+        'opentopo': {
           type: 'raster',
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
+          tiles: [
+            'https://a.tile.opentopomap.org/{z}/{x}/{y}.png',
+            'https://b.tile.opentopomap.org/{z}/{x}/{y}.png',
+            'https://c.tile.opentopomap.org/{z}/{x}/{y}.png',
+          ],
           tileSize: 256,
-          maxzoom: 18,
-          attribution: 'Tiles © Esri — World Topo Map',
+          maxzoom: 17,
+          attribution: '© OpenStreetMap contributors, © OpenTopoMap (CC-BY-SA)',
+        },
+        'esri-hillshade': {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256,
+          maxzoom: 16,
+          attribution: 'Hillshade © Esri',
         },
       },
       layers: [
-        { id: 'esri-topo', type: 'raster', source: 'esri-topo', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-hillshade', type: 'raster', source: 'esri-hillshade', minzoom: 0, maxzoom: 22, paint: { 'raster-opacity': 0.55 } },
+        { id: 'opentopo', type: 'raster', source: 'opentopo', minzoom: 0, maxzoom: 22 },
       ],
     },
   };
@@ -2762,6 +2884,50 @@
     trackUserLocation: true,
   });
   map.addControl(geoControl, 'top-right');
+
+  // Clean / print-preview view: hide chrome under the geolocate button.
+  class CleanViewControl {
+    onAdd(mapRef) {
+      this._map = mapRef;
+      this._container = document.createElement('div');
+      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'maplibregl-ctrl-icon';
+      btn.title = t('clean_view');
+      btn.setAttribute('aria-label', t('clean_view'));
+      btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 15l6 6M20 15l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+      btn.addEventListener('click', () => setCleanView(true));
+      this._container.appendChild(btn);
+      this._btn = btn;
+      return this._container;
+    }
+    onRemove() {
+      this._container.remove();
+      this._map = undefined;
+    }
+  }
+  map.addControl(new CleanViewControl(), 'top-right');
+
+  // Exit button for clean view (shown only while active).
+  (function ensureCleanViewExit() {
+    let exit = document.getElementById('clean-view-exit');
+    if (!exit) {
+      exit = document.createElement('button');
+      exit.id = 'clean-view-exit';
+      exit.type = 'button';
+      document.body.appendChild(exit);
+    }
+    exit.textContent = t('clean_view_exit');
+    exit.onclick = () => setCleanView(false);
+  })();
+
+  function setCleanView(on) {
+    document.body.classList.toggle('clean-view', !!on);
+    const exit = document.getElementById('clean-view-exit');
+    if (exit) exit.textContent = t('clean_view_exit');
+  }
+
   // Dismissing the browser permission prompt leaves the button disabled;
   // reset it so the user can try again.
   function resetGeolocateButton() {
@@ -4265,6 +4431,10 @@
         mapArea.appendChild(dd);
         dd.style.display = 'none';
       }
+      const opt = document.getElementById('app-options');
+      if (opt && wrapper && wrapper.contains(opt)) {
+        mapArea.appendChild(opt);
+      }
       if (wrapper) wrapper.remove();
       clearDrawListeners();
       if (drawControl) {
@@ -4416,17 +4586,46 @@
             // Move terra-draw ctrl group from MapLibre's container into our drawer
             drawer.appendChild(tdCtrl);
 
-            // Toolbar row: draw toggle + defaults gear (aligned side-by-side)
+            // Toolbar row: draw toggle + app options (language / grid / legend)
             const row = document.createElement('div');
             row.id = 'draw-toolbar-row';
-
             row.appendChild(toggle);
 
+            // Layer defaults gear lives INSIDE the draw drawer (H).
             const ddEl = document.getElementById('draw-defaults');
             if (ddEl) {
-              row.appendChild(ddEl);
+              drawer.appendChild(ddEl);
               ddEl.style.removeProperty('display');
             }
+
+            // Options button replaces the old gear slot next to draw (I).
+            let optHost = document.getElementById('app-options');
+            if (!optHost) {
+              optHost = document.createElement('div');
+              optHost.id = 'app-options';
+              optHost.innerHTML = `
+                <button type="button" class="dd-toggle" id="opt-toggle" title="${t('options_title')}" aria-label="${t('options_title')}">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+                </button>
+                <div class="dd-panel" id="opt-panel">
+                  <div class="dd-row">
+                    <label class="field-label">${t('lang_label')}</label>
+                    <select id="opt-lang" class="field">
+                      <option value="en">${t('lang_en')}</option>
+                      <option value="fr">${t('lang_fr')}</option>
+                    </select>
+                  </div>
+                  <div class="dd-row">
+                    <label class="checkbox-row"><input type="checkbox" id="opt-grid" /> <span>${t('options_grid')}</span></label>
+                    <button type="button" class="btn btn-ghost" id="opt-grid-cfg" style="font-size:11px;">${t('options_open_grid')}</button>
+                  </div>
+                  <div class="dd-row">
+                    <label class="checkbox-row"><input type="checkbox" id="opt-legend" /> <span>${t('options_legend')}</span></label>
+                    <button type="button" class="btn btn-ghost" id="opt-legend-cfg" style="font-size:11px;">${t('options_open_legend')}</button>
+                  </div>
+                </div>`;
+            }
+            row.appendChild(optHost);
 
             wrapper.appendChild(row);
             wrapper.appendChild(drawer);
@@ -4447,6 +4646,9 @@
                 toggle.classList.add('active');
               }
             });
+
+            try { initAppOptionsUi(); } catch (_) {}
+            try { mountDrawDefaultsInToolbar(); } catch (_) {}
 
             // Auto-collapse when a draw-mode button is tapped
             tdCtrl.addEventListener('click', (e) => {
@@ -5972,8 +6174,8 @@
 
       // Render mobile sheet
       if (state.activePanel && (mobile || state.activePanel === 'menu')) {
-        const t = state.activePanel === 'menu' ? 'Outils' : (PANEL_TITLES[state.activePanel] || '');
-        document.getElementById('sheet-title').textContent = t;
+        const title = state.activePanel === 'menu' ? t('panel_menu') : panelTitle(state.activePanel);
+        document.getElementById('sheet-title').textContent = title;
         if (!skipSheetBody) renderPanel('sheet-body', state.activePanel);
         if (mobile) {
           document.getElementById('scrim').classList.add('visible');
@@ -5989,19 +6191,25 @@
   onFeatures(() => ui.render());
   onUi(() => ui.render());
 
-  const PANEL_TITLES = {
-    layers: 'Calques',
-    style: 'Style',
-    measure: 'Propriétés',
-    tools: 'Outils géométriques',
-    legend: 'Légende',
-    coordinates: 'Convertir coordonnées',
-    search: 'Aller à un point',
-    elevation: 'Profil d\'élévation',
-    grid: 'Grille de coordonnées',
-    files: 'Importer / Exporter',
-    menu: 'Outils',
-  };
+  function panelTitle(id) {
+    const map = {
+      layers: 'panel_layers',
+      style: 'panel_style',
+      measure: 'panel_measure',
+      tools: 'panel_tools',
+      legend: 'panel_legend',
+      coordinates: 'panel_coordinates',
+      search: 'panel_search',
+      elevation: 'panel_elevation',
+      grid: 'panel_grid',
+      files: 'panel_files',
+      options: 'panel_options',
+      menu: 'panel_menu',
+    };
+    return t(map[id] || id);
+  }
+  // Back-compat alias used by older call sites.
+  const PANEL_TITLES = new Proxy({}, { get: (_, k) => panelTitle(k) });
 
   function renderPanel(containerId, panelId) {
     const el = document.getElementById(containerId);
@@ -6017,6 +6225,7 @@
     else if (panelId === 'elevation') el.innerHTML = renderElevation();
     else if (panelId === 'grid') el.innerHTML = renderGrid();
     else if (panelId === 'files') el.innerHTML = renderFiles();
+    else if (panelId === 'options') el.innerHTML = renderOptionsPanel();
     // After innerHTML, attach event listeners
     if (panelId === 'coordinates') attachCoordinatesEvents(el);
     if (panelId === 'search') attachSearchEvents(el);
@@ -6027,21 +6236,20 @@
     if (panelId === 'files') attachFilesEvents(el);
     if (panelId === 'tools') attachToolsEvents(el);
     if (panelId === 'legend') attachLegendEvents(el);
+    if (panelId === 'options') attachOptionsPanelEvents(el);
   }
 
   /* ═══ 7. PANEL CONTENT — MENU (mobile) ══════════════════════════════════════ */
   function renderMenu() {
     const items = [
-      { id: 'layers', label: 'Calques', icon: 'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 17l9 5 9-5' },
-      { id: 'style', label: 'Style', icon: 'M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z' },
-      { id: 'measure', label: 'Propriétés', icon: 'M4 6h16M4 12h10M4 18h16' },
-      { id: 'tools', label: 'Outils géométriques', icon: 'M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z' },
-      { id: 'legend', label: 'Légende', icon: 'M4 6h16M4 12h10M4 18h16' },
-      { id: 'coordinates', label: 'Convertir coordonnées', icon: 'M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z' },
-      { id: 'search', label: 'Aller à un point', icon: 'M11 4a7 7 0 100 14 7 7 0 000-14z M16 16l5 5' },
-      { id: 'elevation', label: 'Profil d\'élévation', icon: 'M3 18l5-9 4 5 4-7 5 11H3z' },
-      { id: 'grid', label: 'Grille de coordonnées', icon: 'M3 9h18M3 15h18M9 3v18M15 3v18' },
-      { id: 'files', label: 'Importer / Exporter', icon: 'M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0' },
+      { id: 'layers', label: t('panel_layers'), icon: 'M12 3l9 5-9 5-9-5 9-5z M3 13l9 5 9-5 M3 17l9 5 9-5' },
+      { id: 'style', label: t('panel_style'), icon: 'M12 3a9 9 0 109 9c0-1.5-1-2.5-2.5-2.5H17c-1.5 0-2.5-1-2.5-2.5S15.5 4.5 14 4.5h-2z' },
+      { id: 'measure', label: t('panel_measure'), icon: 'M4 6h16M4 12h10M4 18h16' },
+      { id: 'tools', label: t('panel_tools'), icon: 'M14.7 6.3a4 4 0 015.66 5.66L10 22.36l-7.07 1.41 1.41-7.07L14.7 6.3z' },
+      { id: 'coordinates', label: t('panel_coordinates'), icon: 'M12 2C7 2 4 5.5 4 10c0 5.5 8 12 8 12s8-6.5 8-12c0-4.5-3-8-8-8z' },
+      { id: 'search', label: t('panel_search'), icon: 'M11 4a7 7 0 100 14 7 7 0 000-14z M16 16l5 5' },
+      { id: 'files', label: t('panel_files'), icon: 'M14 4v5h5 M5 12V6a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2H7a2 2 0 01-2-2v0 M9 17l3-3 3 3 M12 14v6' },
+      { id: 'options', label: t('panel_options'), icon: 'M4 6h16M4 12h16M4 18h10' },
     ];
     return `<div class="menu-list">
       ${items.map(it => `
@@ -6295,15 +6503,19 @@
   }
 
   function mountDrawDefaultsInToolbar() {
-    const wrapper = document.getElementById('draw-dropdown-wrapper');
-    const dd = document.getElementById('draw-defaults');
     const drawer = document.getElementById('draw-drawer');
-    if (wrapper && dd && dd.parentElement !== wrapper) {
-      if (drawer) wrapper.insertBefore(dd, drawer);
-      else wrapper.appendChild(dd);
+    const dd = document.getElementById('draw-defaults');
+    if (drawer && dd && dd.parentElement !== drawer) {
+      drawer.appendChild(dd);
     }
-    // Undo the hiding applied while the panel was parked outside the toolbar.
-    if (dd) dd.style.removeProperty('display');
+    if (dd) {
+      dd.style.removeProperty('display');
+      const toggle = document.getElementById('dd-toggle');
+      if (toggle) toggle.setAttribute('data-label', t('draw_defaults'));
+    }
+    const row = document.getElementById('draw-toolbar-row');
+    const opt = document.getElementById('app-options');
+    if (row && opt && opt.parentElement !== row) row.appendChild(opt);
   }
 
   function initDrawDefaultsUi() {
@@ -6623,7 +6835,7 @@
   /* ═══ 10b. PANEL CONTENT — TOOLS (buffer, intersection) ═════════════════════ */
   // Which tool sections are unfolded. Kept outside the render so the panel can
   // re-render on every selection change without snapping shut under the user.
-  const toolsOpen = { bornage: true, buffer: false, intersect: false, contour: false };
+  const toolsOpen = { bornage: false, buffer: false, intersect: false, contour: false, elevation: false, route: false };
   const ACC_CARET = '<svg class="acc-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
     + '<path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
@@ -6710,13 +6922,9 @@
           <div id="it-result" style="font-size:12px; margin-top:8px;"></div>
         `)}
 
-        ${accSection('contour', 'Courbes de niveau', polys.length === 1 ? { text: '1 polygone', ready: true } : null, `
+        ${accSection('contour', t('tool_contour'), polys.length === 1 ? { text: '1', ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Échantillonne l'altitude (Open-Meteo, fallback Open-Elevation) sur le polygone sélectionné et trace les courbes de niveau,
-            avec l'altitude écrite le long de chaque courbe.
-            <br><em style="color:var(--ink-2);">Nécessite Internet. Ne pas utiliser sur des polygones très étendus (limite ~30 km de côté).
-            La densité d'échantillonnage s'adapte à la taille du polygone ; un écart résiduel avec les courbes du fond « Terrain » reste
-            normal car les deux sources utilisent des modèles de terrain différents.</em>
+            Échantillonne l'altitude sur le polygone sélectionné et trace les courbes de niveau.
             ${polys.length === 1 ? '' : '<br><strong>Sélectionnez exactement 1 polygone, rectangle ou cercle.</strong>'}
           </p>
           <div style="display:flex; gap:8px; align-items:flex-end;">
@@ -6726,9 +6934,19 @@
                      value="10" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
             </div>
             <button class="btn btn-solid" id="cn-apply" ${polys.length !== 1 ? 'disabled' : ''}
-                    style="white-space:nowrap;">Tracer</button>
+                    style="white-space:nowrap;">${t('btn_trace')}</button>
           </div>
           <div id="cn-result" style="font-size:12px; margin-top:8px;"></div>
+        `)}
+
+        ${accSection('elevation', t('tool_elevation'), (sel.length === 1 && sel[0].kind === 'line') ? { text: '1', ready: true } : null, `
+          <div id="tools-elevation-host">${renderElevation()}</div>
+        `)}
+
+        ${accSection('route', t('tool_route'), null, `
+          <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">${t('route_hint')}</p>
+          <button class="btn btn-solid" id="rt-start" style="width:100%;">${t('route_start')}</button>
+          <div id="rt-msg" style="font-size:12px; margin-top:8px; color:var(--ink-1);"></div>
         `)}
       </div>
     `;
@@ -6738,6 +6956,20 @@
     root.querySelectorAll('details.acc[data-acc]').forEach(d => {
       d.addEventListener('toggle', () => { toolsOpen[d.dataset.acc] = d.open; });
     });
+
+    const elevHost = root.querySelector('#tools-elevation-host');
+    if (elevHost) {
+      try { attachElevationEvents(elevHost); } catch (_) {}
+    }
+
+    const rtBtn = root.querySelector('#rt-start');
+    const rtMsg = root.querySelector('#rt-msg');
+    if (rtBtn) {
+      rtBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        startRoutePick(rtMsg, rtBtn);
+      });
+    }
 
     // ─── Bornage (polygon by coordinates) ───
     (function bornage() {
@@ -7338,26 +7570,35 @@
     if (!state._legend) {
       state._legend = {
         enabled: false,
-        title: 'Légende',
+        title: t('panel_legend'),
         position: 'bottom-right',
         fontSize: 13,
-        // selectedIds: optional. If null/undefined, all VISIBLE features
-        // are shown. If an array, only those ids appear. The user can
-        // toggle inclusion per feature via the checkboxes below.
+        // null = follow layer rules: all features in a named layer checked,
+        // ungrouped features unchecked by default.
         selectedIds: null,
-        // Per-feature label overrides. {featureId: customLabel}
         labelOverrides: {},
+        box: null, // {left, top, width, height} when user dragged/resized
       };
     }
+    if (!state._legend._seededSelection) {
+      if (state._legend.selectedIds == null) {
+        state._legend.selectedIds = legendDefaultSelectedIds();
+      }
+      state._legend._seededSelection = true;
+    }
+  }
+
+  function legendDefaultSelectedIds() {
+    return state.features.filter((f) => !!f.groupId).map((f) => f.id);
   }
 
   function renderLegend() {
     ensureLegendState();
     const cfg = state._legend;
-    const featureList = state.features.map(f => {
-      const included = cfg.selectedIds === null
-        ? !!f.style.visible
-        : cfg.selectedIds.includes(f.id);
+    if (cfg.selectedIds === null) cfg.selectedIds = legendDefaultSelectedIds();
+
+    const renderItem = (f) => {
+      const included = cfg.selectedIds.includes(f.id);
       const customLabel = cfg.labelOverrides[f.id];
       const swatchColor = f.kind === 'line' ? f.style.stroke : f.style.fill;
       return `
@@ -7369,52 +7610,59 @@
                  placeholder="${escapeHtml(f.name)}"
                  style="flex:1; min-width:0; font-size:12px; padding:4px 6px;" />
         </div>`;
-    }).join('');
+    };
+
+    let body = '';
+    if (!state.features.length) {
+      body = `<div class="empty-state">${t('legend_none')}</div>`;
+    } else {
+      for (const g of state.groups) {
+        const members = state.features.filter((f) => f.groupId === g.id);
+        if (!members.length) continue;
+        body += `<div class="field-label" style="margin:10px 0 4px;">${escapeHtml(g.name)}</div>`;
+        body += members.map(renderItem).join('');
+      }
+      const ungrouped = state.features.filter((f) => !f.groupId);
+      if (ungrouped.length) {
+        body += `<div class="field-label" style="margin:10px 0 4px;">${t('legend_ungrouped')}</div>`;
+        body += ungrouped.map(renderItem).join('');
+      }
+    }
 
     return `
       <div class="stack">
         <div class="surface">
           <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
             <input type="checkbox" id="lg-enabled" ${cfg.enabled ? 'checked' : ''} />
-            <span style="font-weight:500;">Afficher la légende sur la carte</span>
+            <span style="font-weight:500;">${t('show_legend')}</span>
           </label>
         </div>
-
         <div class="surface">
-          <label class="field-label">Titre</label>
-          <input type="text" id="lg-title" class="field" autocapitalize="off" autocorrect="off"
-                 value="${escapeHtml(cfg.title || 'Légende')}" />
-
-          <label class="field-label" style="margin-top:10px;">Position sur la carte</label>
+          <label class="field-label">${t('legend_title')}</label>
+          <input type="text" id="lg-title" class="field" value="${escapeHtml(cfg.title || t('panel_legend'))}" />
+          <label class="field-label" style="margin-top:10px;">${t('legend_position')}</label>
           <select id="lg-position" class="field">
-            <option value="top-left" ${cfg.position === 'top-left' ? 'selected' : ''}>Haut-gauche</option>
-            <option value="top-right" ${cfg.position === 'top-right' ? 'selected' : ''}>Haut-droite</option>
-            <option value="bottom-left" ${cfg.position === 'bottom-left' ? 'selected' : ''}>Bas-gauche</option>
-            <option value="bottom-right" ${cfg.position === 'bottom-right' ? 'selected' : ''}>Bas-droite</option>
+            <option value="top-left" ${cfg.position === 'top-left' ? 'selected' : ''}>${t('pos_tl')}</option>
+            <option value="top-right" ${cfg.position === 'top-right' ? 'selected' : ''}>${t('pos_tr')}</option>
+            <option value="bottom-left" ${cfg.position === 'bottom-left' ? 'selected' : ''}>${t('pos_bl')}</option>
+            <option value="bottom-right" ${cfg.position === 'bottom-right' ? 'selected' : ''}>${t('pos_br')}</option>
           </select>
-
-          <label class="field-label" style="margin-top:10px;">Taille du texte</label>
+          <label class="field-label" style="margin-top:10px;">${t('legend_fontsize')}</label>
           <select id="lg-fontsize" class="field">
-            <option value="11" ${cfg.fontSize === 11 ? 'selected' : ''}>Petit (11px)</option>
-            <option value="13" ${cfg.fontSize === 13 ? 'selected' : ''}>Moyen (13px)</option>
-            <option value="15" ${cfg.fontSize === 15 ? 'selected' : ''}>Grand (15px)</option>
+            <option value="11" ${cfg.fontSize === 11 ? 'selected' : ''}>${t('size_s')}</option>
+            <option value="13" ${cfg.fontSize === 13 ? 'selected' : ''}>${t('size_m')}</option>
+            <option value="15" ${cfg.fontSize === 15 ? 'selected' : ''}>${t('size_l')}</option>
           </select>
         </div>
-
         <div>
           <div class="field-label" style="display:flex; justify-content:space-between; align-items:center;">
-            <span>Objets dans la légende</span>
+            <span>${t('legend_items')}</span>
             <button class="btn btn-ghost" id="lg-reset-selection" style="font-size:11px; min-height:auto; padding:3px 8px;">
-              Synchroniser avec œil
+              ${t('legend_sync_eye')}
             </button>
           </div>
-          <p style="font-size:11px; color:var(--ink-2); margin:4px 0 8px;">
-            Cochez les objets à inclure. Vous pouvez modifier le texte affiché pour chacun
-            (laissez vide pour utiliser le nom de l'objet).
-          </p>
-          ${state.features.length === 0
-            ? '<div class="empty-state">Aucun objet à inclure.</div>'
-            : `<div id="lg-feature-list">${featureList}</div>`}
+          <p style="font-size:11px; color:var(--ink-2); margin:4px 0 8px;">${t('legend_hint')}</p>
+          <div id="lg-feature-list">${body}</div>
         </div>
       </div>`;
   }
@@ -7438,6 +7686,7 @@
     });
     if (lgPosition) lgPosition.addEventListener('change', () => {
       cfg.position = lgPosition.value;
+      cfg.box = null;
       updateLegendBox();
     });
     if (lgFontSize) lgFontSize.addEventListener('change', () => {
@@ -7445,19 +7694,16 @@
       updateLegendBox();
     });
     if (lgReset) lgReset.addEventListener('click', () => {
-      cfg.selectedIds = null;  // null = follow visibility
+      cfg.selectedIds = legendDefaultSelectedIds();
       updateLegendBox();
-      ui.render();   // re-render to update the checkboxes
+      ui.render();
     });
 
-    // Per-item checkboxes: toggle inclusion of this feature
     root.querySelectorAll('.lg-item-toggle').forEach(cb => {
       cb.addEventListener('change', () => {
         const id = cb.dataset.id;
-        // First time we deviate from the default (null = follow visibility),
-        // snapshot the current visible set as the explicit selection.
-        if (cfg.selectedIds === null) {
-          cfg.selectedIds = state.features.filter(f => f.style.visible).map(f => f.id);
+        if (!Array.isArray(cfg.selectedIds)) {
+          cfg.selectedIds = legendDefaultSelectedIds();
         }
         if (cb.checked) {
           if (!cfg.selectedIds.includes(id)) cfg.selectedIds.push(id);
@@ -7486,9 +7732,8 @@
   // (so adding/removing/hiding an object refreshes the legend live).
   function updateLegendBox() {
     let box = document.getElementById('legend-box');
+    ensureLegendState();
     const cfg = state._legend || { enabled: false };
-    // Every legend control funnels through here, so this is the one place
-    // that has to persist the configuration.
     try { saveState(); } catch (_) {}
     if (!cfg.enabled) {
       if (box) box.style.display = 'none';
@@ -7497,57 +7742,115 @@
     if (!box) {
       box = document.createElement('div');
       box.id = 'legend-box';
-      const appEl = document.getElementById('app') || document.body;
-      appEl.appendChild(box);
+      (document.getElementById('app') || document.body).appendChild(box);
+      installLegendBoxInteractions(box);
     }
-    // Position
-    box.style.cssText = '';
-    box.style.position = 'absolute';
-    box.style.zIndex = '20';
-    box.style.background = 'rgba(15, 19, 26, 0.92)';
-    box.style.border = '1px solid var(--line)';
-    box.style.borderRadius = '8px';
-    box.style.padding = '10px 12px';
-    box.style.minWidth = '160px';
-    box.style.maxWidth = '220px';
-    box.style.maxHeight = '40vh';
-    box.style.overflowY = 'auto';
-    box.style.color = 'var(--ink-0)';
-    box.style.fontSize = (cfg.fontSize || 13) + 'px';
-    box.style.lineHeight = '1.4';
-    box.style.boxShadow = '0 4px 16px rgba(0,0,0,0.5)';
     box.style.display = 'block';
-    // Position offsets (avoid overlap with sidebar + map controls)
-    const pos = cfg.position || 'bottom-right';
-    box.style.top = box.style.bottom = box.style.left = box.style.right = 'auto';
-    if (pos === 'top-left')      { box.style.top = '60px';    box.style.left = '74px'; }
-    else if (pos === 'top-right')    { box.style.top = '60px';    box.style.right = '10px'; }
-    else if (pos === 'bottom-left')  { box.style.bottom = '40px'; box.style.left = '74px'; }
-    else                              { box.style.bottom = '40px'; box.style.right = '10px'; }
+    box.style.fontSize = (cfg.fontSize || 13) + 'px';
 
-    // Content: features either explicitly selected, or (if cfg.selectedIds
-    // is null) all currently-visible ones.
-    const selectedIds = cfg.selectedIds;
+    const saved = cfg.box;
+    if (saved && isFinite(saved.left) && isFinite(saved.top)) {
+      box.style.left = saved.left + 'px';
+      box.style.top = saved.top + 'px';
+      box.style.right = 'auto';
+      box.style.bottom = 'auto';
+      if (saved.width) box.style.width = saved.width + 'px';
+      if (saved.height) box.style.height = saved.height + 'px';
+    } else {
+      box.style.top = box.style.bottom = box.style.left = box.style.right = 'auto';
+      const pos = cfg.position || 'bottom-right';
+      if (pos === 'top-left') { box.style.top = '60px'; box.style.left = '74px'; }
+      else if (pos === 'top-right') { box.style.top = '60px'; box.style.right = '10px'; }
+      else if (pos === 'bottom-left') { box.style.bottom = '40px'; box.style.left = '74px'; }
+      else { box.style.bottom = '40px'; box.style.right = '10px'; }
+    }
+
+    const selectedIds = Array.isArray(cfg.selectedIds) ? cfg.selectedIds : legendDefaultSelectedIds();
     const overrides = cfg.labelOverrides || {};
-    const items = state.features.filter(f => {
-      if (selectedIds === null || selectedIds === undefined) {
-        return !!(f.style && f.style.visible);
-      }
-      return selectedIds.includes(f.id);
-    });
-    const header = `<div style="font-weight:600; margin-bottom:6px; color:var(--brand);">${escapeHtml(cfg.title || 'Légende')}</div>`;
-    if (items.length === 0) {
-      box.innerHTML = header + '<div style="color:var(--ink-2); font-style:italic;">(Aucun objet)</div>';
+    const items = state.features.filter((f) => selectedIds.includes(f.id));
+
+    // Group rows: layers first, then ungrouped (if any selected).
+    const sections = [];
+    for (const g of state.groups) {
+      const members = items.filter((f) => f.groupId === g.id);
+      if (!members.length) continue;
+      sections.push({ title: g.name, members });
+    }
+    const ungrouped = items.filter((f) => !f.groupId);
+    if (ungrouped.length) sections.push({ title: t('legend_ungrouped'), members: ungrouped });
+
+    const header = `<div class="lg-drag">${escapeHtml(cfg.title || t('panel_legend'))}</div>`;
+    if (!items.length) {
+      box.innerHTML = header + `<div style="color:var(--ink-2); font-style:italic;">${t('legend_empty')}</div>`;
       return;
     }
-    const rows = items.map(f => {
-      const swatch = f.kind === 'line'
-        ? `<span style="display:inline-block; width:14px; height:3px; background:${f.style.stroke}; margin-right:6px; vertical-align:middle;"></span>`
-        : `<span style="display:inline-block; width:12px; height:12px; background:${f.style.fill}; border:1px solid ${f.style.stroke}; margin-right:6px; vertical-align:middle; border-radius:2px;"></span>`;
-      const label = overrides[f.id] || f.name;
-      return `<div style="margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${swatch}${escapeHtml(label)}</div>`;
+    const rows = sections.map((sec) => {
+      const title = `<div class="lg-group-title">${escapeHtml(sec.title)}</div>`;
+      const body = sec.members.map((f) => {
+        const swatch = f.kind === 'line'
+          ? `<span style="display:inline-block; width:14px; height:3px; background:${f.style.stroke}; margin-right:6px; vertical-align:middle;"></span>`
+          : `<span style="display:inline-block; width:12px; height:12px; background:${f.style.fill}; border:1px solid ${f.style.stroke}; margin-right:6px; vertical-align:middle; border-radius:2px;"></span>`;
+        return `<div style="margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${swatch}${escapeHtml(overrides[f.id] || f.name)}</div>`;
+      }).join('');
+      return title + body;
     }).join('');
     box.innerHTML = header + rows;
+  }
+
+  function installLegendBoxInteractions(box) {
+    if (box._lgReady) return;
+    box._lgReady = true;
+    let dragging = false, ox = 0, oy = 0;
+    const onDown = (e) => {
+      const handle = e.target.closest('.lg-drag');
+      if (!handle) return;
+      dragging = true;
+      const r = box.getBoundingClientRect();
+      const pt = e.touches ? e.touches[0] : e;
+      ox = pt.clientX - r.left;
+      oy = pt.clientY - r.top;
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const pt = e.touches ? e.touches[0] : e;
+      const left = Math.max(4, Math.min(window.innerWidth - 40, pt.clientX - ox));
+      const top = Math.max(4, Math.min(window.innerHeight - 40, pt.clientY - oy));
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+      box.style.right = 'auto';
+      box.style.bottom = 'auto';
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      ensureLegendState();
+      const r = box.getBoundingClientRect();
+      state._legend.box = {
+        left: r.left, top: r.top,
+        width: r.width, height: r.height,
+      };
+      try { saveState(); } catch (_) {}
+    };
+    box.addEventListener('mousedown', onDown);
+    box.addEventListener('touchstart', onDown, { passive: false });
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchend', onUp);
+    // Persist size after CSS resize.
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => {
+        if (!state._legend || !state._legend.enabled) return;
+        const r = box.getBoundingClientRect();
+        if (r.width < 40 || r.height < 30) return;
+        state._legend.box = {
+          left: r.left, top: r.top,
+          width: r.width, height: r.height,
+        };
+      });
+      ro.observe(box);
+    }
   }
 
   // Lazy-create the contour rendering layer. Contours go in their own
@@ -7996,20 +8299,38 @@
       const c = crsMeta(fromSel.value);
       if (!c) return;
       if (c.isGeographic) {
-        aLbl.textContent = 'Latitude';
-        bLbl.textContent = 'Longitude';
-        aIn.placeholder = "ex. 33.987654 ou 33° 59' 15.55\" N";
-        bIn.placeholder = "ex. -5.123456 ou 5° 7' 24\" W";
+        aLbl.textContent = t('lat');
+        bLbl.textContent = t('lon');
+        const fmt = (fmtSel && fmtSel.value) || 'decimal';
+        if (fmt === 'dms') {
+          aIn.placeholder = t('fmt_ex_dms_lat');
+          bIn.placeholder = t('fmt_ex_dms_lon');
+        } else if (fmt === 'dm') {
+          aIn.placeholder = t('fmt_ex_dm_lat');
+          bIn.placeholder = t('fmt_ex_dm_lon');
+        } else {
+          aIn.placeholder = t('fmt_ex_decimal_lat');
+          bIn.placeholder = t('fmt_ex_decimal_lon');
+        }
       } else {
         aLbl.textContent = c.axes[0];
         bLbl.textContent = c.axes[1];
-        aIn.placeholder = 'ex. 500000.00';
-        bIn.placeholder = 'ex. 300000.00';
+        aIn.placeholder = 'e.g. 500000.00';
+        bIn.placeholder = 'e.g. 300000.00';
       }
-      fmtSel.style.display = c.isGeographic ? 'block' : 'none';
+      if (fmtSel) fmtSel.style.display = c.isGeographic ? 'block' : 'none';
     }
     updateLabels();
     fromSel.addEventListener('change', updateLabels);
+    if (fmtSel) {
+      fmtSel.addEventListener('change', updateLabels);
+      // Localize format option labels
+      [...fmtSel.options].forEach((o) => {
+        if (o.value === 'decimal') o.textContent = t('format_decimal');
+        if (o.value === 'dms') o.textContent = t('format_dms');
+        if (o.value === 'dm') o.textContent = t('format_dm');
+      });
+    }
 
     if (countrySel) {
       countrySel.addEventListener('change', () => {
@@ -8203,15 +8524,32 @@
     function showConvertResult(out, fromId, toId) {
       const resultEl = root.querySelector('#cc-result');
       if (!resultEl) return;
-      const outCrs = CRS_BY_ID[toId];
+      const outCrs = CRS_BY_ID[toId] || AtlasCRS.getCRS(toId);
+      if (!outCrs) return;
       const [lng, lat] = coordsToWgs84(out, toId);
-      const labelA = outCrs.isGeographic ? 'Latitude' : outCrs.axes[0];
-      const labelB = outCrs.isGeographic ? 'Longitude' : outCrs.axes[1];
-      const outDispA = outCrs.isGeographic ? `${lat.toFixed(6)}°` : formatProjected(out[0], 3);
-      const outDispB = outCrs.isGeographic ? `${lng.toFixed(6)}°` : formatProjected(out[1], 3);
-      const copyLine = outCrs.isGeographic
-        ? formatWgsPairCopy(lng, lat, 8)
-        : `${out[0].toFixed(3)}, ${out[1].toFixed(3)}`;
+      const fmt = (fmtSel && fmtSel.value) || 'decimal';
+      const labelA = outCrs.isGeographic ? t('lat') : outCrs.axes[0];
+      const labelB = outCrs.isGeographic ? t('lon') : outCrs.axes[1];
+      let outDispA, outDispB, copyLine;
+      if (outCrs.isGeographic) {
+        if (fmt === 'dms') {
+          outDispA = formatDMS(lat, 'lat');
+          outDispB = formatDMS(lng, 'lon');
+        } else if (fmt === 'dm') {
+          outDispA = formatDM(lat, 'lat');
+          outDispB = formatDM(lng, 'lon');
+        } else {
+          outDispA = formatDecimal(lat, 6);
+          outDispB = formatDecimal(lng, 6);
+        }
+        copyLine = fmt === 'decimal'
+          ? formatWgsPairCopy(lng, lat, 8)
+          : `${outDispA}, ${outDispB}`;
+      } else {
+        outDispA = formatProjected(out[0], 3);
+        outDispB = formatProjected(out[1], 3);
+        copyLine = `${out[0].toFixed(3)}, ${out[1].toFixed(3)}`;
+      }
       const wgsCopy = formatWgsPairCopy(lng, lat, 8);
       const gmaps = googleMapsUrl(lat, lng);
       resultEl.style.display = 'block';
@@ -9398,10 +9736,256 @@
     return String(s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
-      // Single quotes matter: several templates interpolate into
-      // onclick="… fn('${…}')" attributes.
       .replace(/'/g, '&#39;');
   }
+
+  /* ═══ Options panel (language / grid / legend) ══════════════════════════════ */
+  function renderOptionsPanel() {
+    ensureLegendState();
+    const lang = (I18N && I18N.getLang && I18N.getLang()) || 'en';
+    return `
+      <div class="stack">
+        <div class="surface">
+          <label class="field-label">${t('lang_label')}</label>
+          <select id="opt-lang-panel" class="field">
+            <option value="en" ${lang === 'en' ? 'selected' : ''}>${t('lang_en')}</option>
+            <option value="fr" ${lang === 'fr' ? 'selected' : ''}>${t('lang_fr')}</option>
+          </select>
+        </div>
+        <div class="surface">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="opt-grid-panel" ${gridState.enabled ? 'checked' : ''} />
+            <span>${t('options_grid')}</span>
+          </label>
+          <button class="btn btn-subtle" id="opt-open-grid" style="width:100%;margin-top:8px;">${t('options_open_grid')}</button>
+        </div>
+        <div class="surface">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="opt-legend-panel" ${state._legend && state._legend.enabled ? 'checked' : ''} />
+            <span>${t('options_legend')}</span>
+          </label>
+          <button class="btn btn-subtle" id="opt-open-legend" style="width:100%;margin-top:8px;">${t('options_open_legend')}</button>
+        </div>
+      </div>`;
+  }
+
+  function attachOptionsPanelEvents(root) {
+    const langSel = root.querySelector('#opt-lang-panel');
+    if (langSel) langSel.addEventListener('change', () => {
+      I18N.setLang(langSel.value);
+      applyLanguageToChrome();
+      ui.render();
+    });
+    const gridCb = root.querySelector('#opt-grid-panel');
+    if (gridCb) gridCb.addEventListener('change', () => {
+      gridState.enabled = gridCb.checked;
+      try { updateGrid(); } catch (_) {}
+      try { saveState(); } catch (_) {}
+      syncAppOptionsUi();
+    });
+    const legCb = root.querySelector('#opt-legend-panel');
+    if (legCb) legCb.addEventListener('change', () => {
+      ensureLegendState();
+      state._legend.enabled = legCb.checked;
+      updateLegendBox();
+      syncAppOptionsUi();
+    });
+    root.querySelector('#opt-open-grid')?.addEventListener('click', () => ui.setPanel('grid'));
+    root.querySelector('#opt-open-legend')?.addEventListener('click', () => ui.setPanel('legend'));
+  }
+
+  function syncAppOptionsUi() {
+    const langSel = document.getElementById('opt-lang');
+    if (langSel) langSel.value = I18N.getLang();
+    const gridCb = document.getElementById('opt-grid');
+    if (gridCb) gridCb.checked = !!gridState.enabled;
+    const legCb = document.getElementById('opt-legend');
+    ensureLegendState();
+    if (legCb) legCb.checked = !!(state._legend && state._legend.enabled);
+  }
+
+  function applyLanguageToChrome() {
+    try { document.documentElement.lang = I18N.getLang(); } catch (_) {}
+    document.querySelectorAll('.rail-btn').forEach((b) => {
+      const id = b.dataset.panel;
+      if (!id) return;
+      b.title = panelTitle(id);
+      const lbl = b.querySelector('.lbl');
+      if (lbl) {
+        const short = {
+          layers: t('panel_layers'),
+          style: t('panel_style'),
+          measure: t('panel_measure'),
+          coordinates: 'Coord.',
+          search: t('panel_search'),
+          tools: 'Tools',
+          options: t('panel_options'),
+          files: t('panel_files'),
+        };
+        if (I18N.getLang() === 'fr') {
+          Object.assign(short, {
+            layers: 'Calques', style: 'Style', measure: 'Propriétés',
+            coordinates: 'Coord.', search: 'Aller à', tools: 'Outils',
+            options: 'Options', files: 'Fichiers',
+          });
+        }
+        if (short[id]) lbl.textContent = short[id];
+      }
+    });
+    const fab = document.getElementById('fab');
+    if (fab) fab.setAttribute('aria-label', t('fab_menu'));
+    const ddToggle = document.getElementById('dd-toggle');
+    if (ddToggle) {
+      ddToggle.title = t('draw_defaults');
+      ddToggle.setAttribute('data-label', t('draw_defaults'));
+    }
+    const optToggle = document.getElementById('opt-toggle');
+    if (optToggle) {
+      optToggle.title = t('options_title');
+      optToggle.setAttribute('aria-label', t('options_title'));
+    }
+    const exit = document.getElementById('clean-view-exit');
+    if (exit) exit.textContent = t('clean_view_exit');
+  }
+
+  function initAppOptionsUi() {
+    const wrap = document.getElementById('app-options');
+    if (!wrap) return;
+    const toggle = document.getElementById('opt-toggle');
+    if (toggle && !toggle._wired) {
+      toggle._wired = true;
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        wrap.classList.toggle('open');
+        syncAppOptionsUi();
+      });
+      document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) wrap.classList.remove('open');
+      });
+    }
+    const langSel = document.getElementById('opt-lang');
+    if (langSel && !langSel._wired) {
+      langSel._wired = true;
+      langSel.value = I18N.getLang();
+      langSel.addEventListener('change', () => {
+        I18N.setLang(langSel.value);
+        applyLanguageToChrome();
+        ui.render();
+      });
+    }
+    const gridCb = document.getElementById('opt-grid');
+    if (gridCb && !gridCb._wired) {
+      gridCb._wired = true;
+      gridCb.addEventListener('change', () => {
+        gridState.enabled = gridCb.checked;
+        try { updateGrid(); } catch (_) {}
+        try { saveState(); } catch (_) {}
+      });
+    }
+    const legCb = document.getElementById('opt-legend');
+    if (legCb && !legCb._wired) {
+      legCb._wired = true;
+      legCb.addEventListener('change', () => {
+        ensureLegendState();
+        state._legend.enabled = legCb.checked;
+        updateLegendBox();
+      });
+    }
+    const gridCfg = document.getElementById('opt-grid-cfg');
+    if (gridCfg && !gridCfg._wired) {
+      gridCfg._wired = true;
+      gridCfg.addEventListener('click', () => {
+        wrap.classList.remove('open');
+        ui.setPanel('grid');
+      });
+    }
+    const legCfg = document.getElementById('opt-legend-cfg');
+    if (legCfg && !legCfg._wired) {
+      legCfg._wired = true;
+      legCfg.addEventListener('click', () => {
+        wrap.classList.remove('open');
+        ui.setPanel('legend');
+      });
+    }
+    syncAppOptionsUi();
+    applyLanguageToChrome();
+  }
+
+  /* ═══ Route A → B (OSRM) ═══════════════════════════════════════════════════ */
+  let _routePick = null;
+  function startRoutePick(msgEl, btn) {
+    if (_routePick) {
+      try { _routePick.abort(); } catch (_) {}
+      _routePick = null;
+    }
+    const setMsg = (s, kind) => {
+      if (!msgEl) return;
+      msgEl.textContent = s || '';
+      msgEl.style.color = kind === 'err' ? 'var(--danger)' : kind === 'ok' ? 'var(--success)' : 'var(--ink-1)';
+    };
+    setMsg(t('route_pick_a'));
+    if (btn) btn.disabled = true;
+    let pointA = null;
+    const canvas = map.getCanvas();
+    canvas.style.cursor = 'crosshair';
+    let prevMode = null;
+    try {
+      const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+      if (td) { prevMode = td.getMode(); td.setMode('static'); }
+    } catch (_) {}
+
+    const cleanup = () => {
+      canvas.style.cursor = '';
+      map.off('click', onClick);
+      try {
+        const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+        if (td && prevMode) td.setMode(prevMode);
+      } catch (_) {}
+      if (btn) btn.disabled = false;
+      _routePick = null;
+    };
+    _routePick = { abort: cleanup };
+
+    async function onClick(e) {
+      const { lng, lat } = e.lngLat;
+      if (!pointA) {
+        pointA = [lng, lat];
+        setMsg(t('route_pick_b'));
+        return;
+      }
+      cleanup();
+      setMsg('…');
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${pointA[0]},${pointA[1]};${lng},${lat}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const route = data && data.routes && data.routes[0];
+        if (!route || !route.geometry) throw new Error('no route');
+        const km = (route.distance || 0) / 1000;
+        const newF = addFeature(
+          { type: 'Feature', geometry: route.geometry, properties: { _derived: true, _derivedKind: 'route' } },
+          'line',
+          { name: `Route (${km.toFixed(1)} km)`, style: { stroke: '#3aa0ff', strokeWidth: 3.5, fill: '#3aa0ff', fillOpacity: 0 } }
+        );
+        pushFeatureToTerraDraw(newF);
+        notifyFeatures();
+        setMsg(t('route_ok') + ` · ${km.toFixed(1)} km`, 'ok');
+        try {
+          const bb = turf.bbox(route.geometry);
+          map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, duration: 600 });
+        } catch (_) {}
+      } catch (err) {
+        log.warn('[route]', err);
+        setMsg(t('route_err'), 'err');
+      }
+    }
+    map.on('click', onClick);
+  }
+
+  // Wire options UI once the draw toolbar (and #app-options) exist.
+  setTimeout(initAppOptionsUi, 600);
+  setTimeout(initAppOptionsUi, 1600);
 
   /* ═══ 13. SHEET SWIPE-DOWN ══════════════════════════════════════════════════ */
   (function () {
