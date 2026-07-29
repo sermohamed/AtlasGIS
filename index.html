@@ -381,21 +381,22 @@
       backdrop-filter: blur(6px);
     }
 
-    /* Legend overlay: transparent card, draggable + resizable */
+    /* Legend overlay: truly transparent, draggable + edge-resizable (no grip icon) */
     #legend-box {
       position: absolute; z-index: 20;
-      background: rgba(11, 15, 20, 0.28);
-      border: 1px solid rgba(255,255,255,0.28);
+      background: rgba(11, 15, 20, 0.12);
+      border: 1px solid rgba(255,255,255,0.35);
       border-radius: 8px;
-      padding: 10px 12px 14px;
-      min-width: 140px; min-height: 60px;
-      max-width: 50vw; max-height: 60vh;
+      padding: 10px 12px;
+      min-width: 120px; min-height: 48px;
+      max-width: 70vw; max-height: 70vh;
       overflow: auto;
       color: var(--ink-0);
       line-height: 1.4;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-      backdrop-filter: blur(2px);
-      resize: both;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      resize: none; /* custom edge resize — no corner glyph */
       cursor: default;
     }
     #legend-box .lg-drag {
@@ -410,6 +411,13 @@
       font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
       color: var(--ink-2); margin: 8px 0 4px;
     }
+    #legend-box .lg-edge {
+      position: absolute; z-index: 2;
+      touch-action: none;
+    }
+    #legend-box .lg-edge.e { top: 8px; right: -3px; bottom: 8px; width: 8px; cursor: ew-resize; }
+    #legend-box .lg-edge.s { left: 8px; right: 8px; bottom: -3px; height: 8px; cursor: ns-resize; }
+    #legend-box .lg-edge.se { right: -4px; bottom: -4px; width: 14px; height: 14px; cursor: nwse-resize; }
 
     /* Status bar (desktop bottom-right cursor coords) */
     #status-bar {
@@ -486,7 +494,7 @@
       border-top: 1px solid var(--line);
       border-radius: 20px 20px 0 0;
       box-shadow: 0 -16px 40px -8px rgba(0,0,0,0.55);
-      max-height: 45dvh;
+      max-height: 55dvh;
       transform: translateY(100%);
       transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
       display: flex; flex-direction: column;
@@ -511,12 +519,39 @@
     .sheet-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
 
     .sheet-body {
-      flex: 0 1 auto;
-      max-height: calc(45dvh - 64px);
+      flex: 1 1 auto;
+      max-height: calc(55dvh - 64px);
       min-height: 0;
       overflow-y: auto; overscroll-behavior: contain;
       padding: 0 16px 16px;
       -webkit-overflow-scrolling: touch;
+    }
+
+    /* Landscape: side sheet so tools stay usable with short viewport height */
+    @media (max-height: 520px) and (orientation: landscape) {
+      #sheet {
+        left: auto; right: 0; top: 0; bottom: 0;
+        width: min(420px, 52vw);
+        max-height: none;
+        height: 100dvh;
+        border-radius: 16px 0 0 16px;
+        border-top: none;
+        border-left: 1px solid var(--line);
+        box-shadow: -16px 0 40px -8px rgba(0,0,0,0.55);
+        transform: translateX(100%);
+        padding-bottom: 0;
+        padding-left: env(safe-area-inset-left);
+      }
+      #sheet.visible { transform: translateX(0); }
+      .sheet-body {
+        max-height: none;
+        flex: 1 1 auto;
+      }
+      .sheet-pill { display: none; }
+      #fab {
+        bottom: calc(12px + env(safe-area-inset-bottom));
+        right: calc(12px + env(safe-area-inset-right));
+      }
     }
 
     /* ═════ PRIMITIVES ═════ */
@@ -1184,7 +1219,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-29·am (UI polish)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-29·an (route/legend/labels)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1330,6 +1365,12 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3h6M3 3v6M21 3h-6M21 3v6M3 21h6M3 21v-6M21 21h-6M21 21v-6"/>
             <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+        <button class="basemap-btn" id="vc-clean-view" title="Clean view" aria-label="Clean view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h10"/>
+            <path d="M14 15l6 6M20 15l-6 6"/>
           </svg>
         </button>
       </div>
@@ -1845,7 +1886,7 @@
   const STORAGE_KEY = 'hydraulic-gis:features:v1';
   const GROUPS_KEY = 'hydraulic-gis:groups:v1';
   const DRAW_DEFAULTS_KEY = 'hydraulic-gis:draw-defaults:v1';
-  const LEGEND_KEY = 'hydraulic-gis:legend:v1';
+  const LEGEND_KEY = 'hydraulic-gis:legend:v2';
   const GRID_KEY = 'hydraulic-gis:grid:v1';
   const VALID_BASEMAP_IDS = ['satellite', 'hybrid', 'terrain', 'dark', 'light'];
   function loadState() {
@@ -2901,30 +2942,6 @@
   });
   map.addControl(geoControl, 'top-right');
 
-  // Clean / print-preview view: hide chrome under the geolocate button.
-  class CleanViewControl {
-    onAdd(mapRef) {
-      this._map = mapRef;
-      this._container = document.createElement('div');
-      this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'maplibregl-ctrl-icon';
-      btn.title = t('clean_view');
-      btn.setAttribute('aria-label', t('clean_view'));
-      btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M14 15l6 6M20 15l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
-      btn.addEventListener('click', () => setCleanView(true));
-      this._container.appendChild(btn);
-      this._btn = btn;
-      return this._container;
-    }
-    onRemove() {
-      this._container.remove();
-      this._map = undefined;
-    }
-  }
-  map.addControl(new CleanViewControl(), 'top-right');
-
   // Exit button for clean view (shown only while active).
   (function ensureCleanViewExit() {
     let exit = document.getElementById('clean-view-exit');
@@ -2936,6 +2953,15 @@
     }
     exit.textContent = t('clean_view_exit');
     exit.onclick = () => setCleanView(false);
+  })();
+
+  (function wireCleanViewBtn() {
+    const btn = document.getElementById('vc-clean-view');
+    if (!btn || btn._wired) return;
+    btn._wired = true;
+    btn.title = t('clean_view');
+    btn.setAttribute('aria-label', t('clean_view'));
+    btn.addEventListener('click', () => setCleanView(true));
   })();
 
   function setCleanView(on) {
@@ -3207,16 +3233,9 @@
 
   // A dragged label stores a *relative* offset (distance + bearing from the
   // object's natural anchor), never an absolute position. That way the label
-  // follows the object when it is moved or reshaped, and the offset can be
-  // clamped so the label can never drift off on its own.
-  function labelMaxOffsetMeters(f) {
-    try {
-      const bb = turf.bbox(f.geojson);
-      const diag = turf.distance([bb[0], bb[1]], [bb[2], bb[3]], { units: 'meters' });
-      return Math.max(25, Math.min(diag * 0.9, 400));
-    } catch (_) {
-      return 120;
-    }
+  // follows the object when it is moved or reshaped — at any distance.
+  function labelMaxOffsetMeters() {
+    return Infinity;
   }
 
   function computeLabelBaseAnchor(f, allFeatures) {
@@ -3289,7 +3308,7 @@
     if (f.labelAnchor) migrateLabelAnchor(f, base);
     const off = f.labelOffset;
     if (!off || !(off.distM > 0.5)) return base;
-    const distM = Math.min(off.distM, labelMaxOffsetMeters(f));
+    const distM = Math.max(0, Number(off.distM) || 0);
     try {
       return turf.destination(turf.point(base), distM, off.bearing, { units: 'meters' })
         .geometry.coordinates.slice();
@@ -3627,14 +3646,8 @@
           distM = turf.distance(from, to, { units: 'meters' });
           bearing = turf.bearing(from, to);
         } catch (_) {}
-        const maxM = labelMaxOffsetMeters(f);
         delete f.labelAnchor;
-        f.labelOffset = distM < 0.5 ? null : { distM: Math.min(distM, maxM), bearing };
-        // Leash: past the limit the handle snaps back instead of drifting off.
-        if (distM > maxM) {
-          const clamped = computeLabelAnchor(f, state.features);
-          if (clamped) marker.setLngLat(clamped);
-        }
+        f.labelOffset = distM < 0.5 ? null : { distM, bearing };
       }
       applyLabelFeatures(buildLabelFeatures(), { live: true });
     });
@@ -4609,39 +4622,10 @@
             // Move terra-draw ctrl group from MapLibre's container into our drawer
             drawer.appendChild(tdCtrl);
 
-            // Toolbar row: draw toggle + app options (language / grid / legend)
+            // Toolbar row: draw toggle only (options live under Tools / Options panel).
             const row = document.createElement('div');
             row.id = 'draw-toolbar-row';
             row.appendChild(toggle);
-
-            // Options button replaces the old gear slot next to draw (I).
-            let optHost = document.getElementById('app-options');
-            if (!optHost) {
-              optHost = document.createElement('div');
-              optHost.id = 'app-options';
-              optHost.innerHTML = `
-                <button type="button" class="dd-toggle" id="opt-toggle" title="${t('options_title')}" aria-label="${t('options_title')}">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-                </button>
-                <div class="dd-panel" id="opt-panel">
-                  <div class="dd-row">
-                    <label class="field-label">${t('lang_label')}</label>
-                    <select id="opt-lang" class="field">
-                      <option value="en">${t('lang_en')}</option>
-                      <option value="fr">${t('lang_fr')}</option>
-                    </select>
-                  </div>
-                  <div class="dd-row">
-                    <label class="checkbox-row"><input type="checkbox" id="opt-grid" /> <span>${t('options_grid')}</span></label>
-                    <button type="button" class="btn btn-ghost" id="opt-grid-cfg" style="font-size:11px;">${t('options_open_grid')}</button>
-                  </div>
-                  <div class="dd-row">
-                    <label class="checkbox-row"><input type="checkbox" id="opt-legend" /> <span>${t('options_legend')}</span></label>
-                    <button type="button" class="btn btn-ghost" id="opt-legend-cfg" style="font-size:11px;">${t('options_open_legend')}</button>
-                  </div>
-                </div>`;
-            }
-            row.appendChild(optHost);
 
             wrapper.appendChild(row);
             wrapper.appendChild(drawer);
@@ -4669,7 +4653,6 @@
               }
             });
 
-            try { initAppOptionsUi(); } catch (_) {}
             try { mountDrawDefaultsInToolbar(); } catch (_) {}
 
             // Auto-collapse when a draw-mode button is tapped
@@ -6548,7 +6531,9 @@
     }
     const row = document.getElementById('draw-toolbar-row');
     const opt = document.getElementById('app-options');
-    if (row && opt && opt.parentElement !== row) row.appendChild(opt);
+    // Map options popover removed — hide leftover host if present.
+    if (opt) opt.style.display = 'none';
+    if (row && opt && row.contains(opt)) opt.remove();
   }
 
   function initDrawDefaultsUi() {
@@ -6892,12 +6877,11 @@
     const bornagePts = (state._bornage && state._bornage.points) ? state._bornage.points.length : 0;
     return `
       <div class="stack">
-        ${accSection('bornage', 'Bornage', bornagePts ? { text: `${bornagePts} pt${bornagePts > 1 ? 's' : ''}`, ready: true } : null, `
+        ${accSection('bornage', t('tool_bornage'), bornagePts ? { text: `${bornagePts} pt${bornagePts > 1 ? 's' : ''}`, ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Saisissez autant de points que voulu, puis « Terminer » relie tous les points en polygone.
-            Un point situé à plus de 100&nbsp;km du précédent est refusé (erreur de saisie probable).
+            ${t('tool_bornage_hint')}
           </p>
-          <label class="field-label" style="font-size:11px;">Système de coordonnées</label>
+          <label class="field-label" style="font-size:11px;">${t('crs_label')}</label>
           <select id="bn-crs" class="field" style="margin-bottom:8px;">
             ${crsOptionsHtml((state._bornage && state._bornage.crs) || 'wgs84', preferredCrsCountry || 'MA')}
           </select>
@@ -6916,58 +6900,58 @@
           </div>
           <div id="bn-msg" style="font-size:12px; margin-top:8px;"></div>
           <div style="margin-top:10px;">
-            <label class="field-label" style="font-size:11px;">Importer un fichier (CSV / TSV)</label>
+            <label class="field-label" style="font-size:11px;">${t('import_file_csv')}</label>
             <p style="font-size:11px; color:var(--ink-2); margin:4px 0 8px;">
-              Table avec colonnes <strong>borne</strong>, <strong>X</strong>, <strong>Y</strong> (séparateur virgule, point-virgule ou tabulation).
+              ${t('import_csv_hint')}
             </p>
             <input type="file" id="bn-file" accept=".csv,.txt,.tsv,text/csv,text/plain" style="display:none;" />
-            <button class="btn btn-subtle" id="bn-import" style="width:100%;">Choisir un fichier…</button>
+            <button class="btn btn-subtle" id="bn-import" style="width:100%;">${t('choose_file')}</button>
             <label style="display:flex; align-items:center; gap:8px; font-size:11px; color:var(--ink-1); margin-top:8px;">
               <input type="checkbox" id="bn-replace" checked />
-              Remplacer les points déjà saisis
+              ${t('replace_points')}
             </label>
           </div>
           <div id="bn-list" style="margin-top:8px;"></div>
-          <button class="btn btn-solid" id="bn-finish" style="width:100%; margin-top:10px;">Terminer le polygone</button>
+          <button class="btn btn-solid" id="bn-finish" style="width:100%; margin-top:10px;">${t('finish_polygon')}</button>
         `)}
 
-        ${accSection('buffer', 'Buffer (zone tampon)', sel.length === 1 ? { text: '1 objet', ready: true } : null, `
+        ${accSection('buffer', t('tool_buffer'), sel.length === 1 ? { text: '1', ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Crée un nouvel objet polygonal à une distance donnée autour d'un objet sélectionné.
-            ${sel.length === 0 ? '<br><strong>Sélectionnez un objet pour commencer.</strong>' : ''}
-            ${sel.length > 1 ? '<br><strong>Sélectionnez un seul objet à la fois.</strong>' : ''}
+            ${t('tool_buffer_hint')}
+            ${sel.length === 0 ? '<br><strong>' + t('select_one_object') + '</strong>' : ''}
+            ${sel.length > 1 ? '<br><strong>' + t('select_only_one') + '</strong>' : ''}
           </p>
           <div style="display:flex; gap:8px; align-items:flex-end;">
             <div style="flex:1;">
-              <label class="field-label" style="font-size:11px;">Rayon (mètres)</label>
+              <label class="field-label" style="font-size:11px;">${t('radius_m')}</label>
               <input type="text" id="bf-radius" class="field" inputmode="decimal" autocapitalize="off" autocorrect="off"
                      value="50" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
             </div>
             <button class="btn btn-solid" id="bf-apply" ${sel.length !== 1 ? 'disabled' : ''}
-                    style="white-space:nowrap;">Appliquer</button>
+                    style="white-space:nowrap;">${t('btn_apply')}</button>
           </div>
         `)}
 
-        ${accSection('intersect', 'Intersection de polygones', polys.length >= 2 ? { text: `${polys.length} polygones`, ready: true } : null, `
+        ${accSection('intersect', t('tool_intersect'), polys.length >= 2 ? { text: `${polys.length}`, ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Calcule la zone commune (chevauchement) entre 2 polygones sélectionnés et la crée comme nouvel objet.
-            ${polys.length === 0 ? "<br><strong>Sélectionnez au moins 2 polygones avec « Sélection multiple ».</strong>"
-              : polys.length === 1 ? "<br><strong>Encore 1 polygone à sélectionner.</strong>"
-              : `<br><strong>${polys.length} polygones sélectionnés.</strong>`}
+            ${t('tool_intersect_hint')}
+            ${polys.length === 0 ? '<br><strong>' + t('select_two_polys') + '</strong>'
+              : polys.length === 1 ? '<br><strong>' + t('select_one_more_poly') + '</strong>'
+              : '<br><strong>' + polys.length + ' ' + t('polys_selected') + '</strong>'}
           </p>
           <button class="btn btn-solid" id="it-apply" ${polys.length < 2 ? 'disabled' : ''}
-                  style="width:100%;">Calculer l'intersection</button>
+                  style="width:100%;">${t('btn_intersect')}</button>
           <div id="it-result" style="font-size:12px; margin-top:8px;"></div>
         `)}
 
         ${accSection('contour', t('tool_contour'), polys.length === 1 ? { text: '1', ready: true } : null, `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">
-            Échantillonne l'altitude sur le polygone sélectionné et trace les courbes de niveau.
-            ${polys.length === 1 ? '' : '<br><strong>Sélectionnez exactement 1 polygone, rectangle ou cercle.</strong>'}
+            ${t('tool_contour_hint')}
+            ${polys.length === 1 ? '' : '<br><strong>' + t('select_one_poly') + '</strong>'}
           </p>
           <div style="display:flex; gap:8px; align-items:flex-end;">
             <div style="flex:1;">
-              <label class="field-label" style="font-size:11px;">Pas (mètres)</label>
+              <label class="field-label" style="font-size:11px;">${t('step_m')}</label>
               <input type="text" id="cn-step" class="field" inputmode="decimal" autocapitalize="off" autocorrect="off"
                      value="10" style="font-family:'JetBrains Mono',ui-monospace,monospace;" />
             </div>
@@ -6981,11 +6965,39 @@
           <div id="tools-elevation-host">${renderElevation()}</div>
         `)}
 
-        ${accSection('route', t('tool_route'), null, `
+        ${accSection('route', t('tool_route'), null, (() => {
+          if (!state._route) state._route = { a: null, b: null };
+          const ptOpts = state.features.filter(f => f.kind === 'point').map(f =>
+            `<option value="${f.id}">${escapeHtml(f.name || f.id)}</option>`
+          ).join('');
+          const fmtPt = (p) => p ? escapeHtml(p.label || `${p.lng.toFixed(5)}, ${p.lat.toFixed(5)}`) : '—';
+          return `
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 10px;">${t('route_hint')}</p>
-          <button class="btn btn-solid" id="rt-start" style="width:100%;">${t('route_start')}</button>
-          <div id="rt-msg" style="font-size:12px; margin-top:8px; color:var(--ink-1);"></div>
-        `)}
+          <div class="surface" style="padding:10px; margin-bottom:8px;">
+            <div class="field-label" style="margin-bottom:6px;">A · ${fmtPt(state._route.a)}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              <button type="button" class="btn btn-subtle" id="rt-a-map" style="flex:1; min-width:90px;">${t('route_from_map')}</button>
+              <button type="button" class="btn btn-subtle" id="rt-a-gps" style="flex:1; min-width:90px;">${t('route_from_gps')}</button>
+            </div>
+            <select id="rt-a-feat" class="field" style="margin-top:8px;">
+              <option value="">${t('route_from_feature')}</option>
+              ${ptOpts}
+            </select>
+          </div>
+          <div class="surface" style="padding:10px; margin-bottom:8px;">
+            <div class="field-label" style="margin-bottom:6px;">B · ${fmtPt(state._route.b)}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              <button type="button" class="btn btn-subtle" id="rt-b-map" style="flex:1; min-width:90px;">${t('route_from_map')}</button>
+              <button type="button" class="btn btn-subtle" id="rt-b-gps" style="flex:1; min-width:90px;">${t('route_from_gps')}</button>
+            </div>
+            <select id="rt-b-feat" class="field" style="margin-top:8px;">
+              <option value="">${t('route_from_feature')}</option>
+              ${ptOpts}
+            </select>
+          </div>
+          <button class="btn btn-solid" id="rt-compute" style="width:100%;" ${!(state._route.a && state._route.b) ? 'disabled' : ''}>${t('route_compute')}</button>
+          <div id="rt-msg" style="font-size:12px; margin-top:8px; color:var(--ink-1);"></div>`;
+        })())}
       </div>
     `;
   }
@@ -7000,15 +7012,40 @@
       try { attachElevationEvents(elevHost); } catch (_) {}
     }
 
-    const rtBtn = root.querySelector('#rt-start');
     const rtMsg = root.querySelector('#rt-msg');
     if (rtMsg && _routeLastMsg) {
       _applyRouteMsg(rtMsg, _routeLastMsg.text, _routeLastMsg.kind);
     }
-    if (rtBtn) {
-      rtBtn.addEventListener('click', (e) => {
+    const wireRouteEndpoint = (which) => {
+      const mapBtn = root.querySelector(`#rt-${which}-map`);
+      const gpsBtn = root.querySelector(`#rt-${which}-gps`);
+      const featSel = root.querySelector(`#rt-${which}-feat`);
+      if (mapBtn) mapBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        startRoutePick(rtMsg, rtBtn);
+        startRouteEndpointPick(which, rtMsg);
+      });
+      if (gpsBtn) gpsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        setRouteEndpointFromGps(which, rtMsg);
+      });
+      if (featSel) featSel.addEventListener('change', () => {
+        const id = featSel.value;
+        if (!id) return;
+        const f = state.features.find(x => x.id === id && x.kind === 'point');
+        if (!f || !f.geojson || !f.geojson.geometry) return;
+        const c = f.geojson.geometry.coordinates;
+        setRouteEndpoint(which, { lng: c[0], lat: c[1], label: f.name || id });
+        featSel.value = '';
+        ui.render();
+      });
+    };
+    wireRouteEndpoint('a');
+    wireRouteEndpoint('b');
+    const rtCompute = root.querySelector('#rt-compute');
+    if (rtCompute) {
+      rtCompute.addEventListener('click', (e) => {
+        e.preventDefault();
+        computeRouteAB(rtMsg, rtCompute);
       });
     }
 
@@ -7612,14 +7649,25 @@
       state._legend = {
         enabled: false,
         title: t('panel_legend'),
+        titleIsDefault: true,
         position: 'bottom-right',
         fontSize: 13,
-        // null = follow layer rules: all features in a named layer checked,
-        // ungrouped features unchecked by default.
+        // Layer-based: 'g:<groupId>' for layers, 'f:<featureId>' for ungrouped objects.
         selectedIds: null,
         labelOverrides: {},
-        box: null, // {left, top, width, height} when user dragged/resized
+        box: null,
+        _schema: 2,
       };
+    }
+    if (state._legend._schema !== 2) {
+      state._legend._schema = 2;
+      state._legend.enabled = false;
+      state._legend.selectedIds = null;
+      state._legend._seededSelection = false;
+      if (state._legend.titleIsDefault !== false) state._legend.titleIsDefault = true;
+    }
+    if (state._legend.titleIsDefault) {
+      state._legend.title = t('panel_legend');
     }
     if (!state._legend._seededSelection) {
       if (state._legend.selectedIds == null) {
@@ -7630,23 +7678,50 @@
   }
 
   function legendDefaultSelectedIds() {
-    return state.features.filter((f) => !!f.groupId).map((f) => f.id);
+    // Layers checked by default; ungrouped objects unchecked.
+    return state.groups
+      .filter((g) => state.features.some((f) => f.groupId === g.id))
+      .map((g) => 'g:' + g.id);
+  }
+
+  function legendKeyForFeature(f) {
+    return f.groupId ? ('g:' + f.groupId) : ('f:' + f.id);
   }
 
   function renderLegend() {
     ensureLegendState();
     const cfg = state._legend;
     if (cfg.selectedIds === null) cfg.selectedIds = legendDefaultSelectedIds();
+    const selected = new Set(cfg.selectedIds || []);
 
-    const renderItem = (f) => {
-      const included = cfg.selectedIds.includes(f.id);
-      const customLabel = cfg.labelOverrides[f.id];
+    const renderGroupRow = (g) => {
+      const members = state.features.filter((f) => f.groupId === g.id);
+      if (!members.length) return '';
+      const key = 'g:' + g.id;
+      const included = selected.has(key);
+      const swatchColor = members[0].kind === 'line' ? members[0].style.stroke : members[0].style.fill;
+      const customLabel = cfg.labelOverrides[key];
+      return `
+        <div class="surface" style="padding:8px 10px; margin-bottom:4px; display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" class="lg-item-toggle" data-key="${key}" ${included ? 'checked' : ''} />
+          <span style="display:inline-block; width:14px; height:14px; background:${swatchColor}; border:1px solid var(--line); border-radius:2px; flex-shrink:0;"></span>
+          <input type="text" class="field lg-item-label" data-key="${key}"
+                 value="${escapeHtml(customLabel != null ? customLabel : g.name)}"
+                 placeholder="${escapeHtml(g.name)}"
+                 style="flex:1; min-width:0; font-size:12px; padding:4px 6px;" />
+        </div>`;
+    };
+
+    const renderUngroupedRow = (f) => {
+      const key = 'f:' + f.id;
+      const included = selected.has(key);
+      const customLabel = cfg.labelOverrides[key];
       const swatchColor = f.kind === 'line' ? f.style.stroke : f.style.fill;
       return `
         <div class="surface" style="padding:8px 10px; margin-bottom:4px; display:flex; align-items:center; gap:8px;">
-          <input type="checkbox" class="lg-item-toggle" data-id="${f.id}" ${included ? 'checked' : ''} />
+          <input type="checkbox" class="lg-item-toggle" data-key="${key}" ${included ? 'checked' : ''} />
           <span style="display:inline-block; width:14px; height:14px; background:${swatchColor}; border:1px solid var(--line); border-radius:2px; flex-shrink:0;"></span>
-          <input type="text" class="field lg-item-label" data-id="${f.id}"
+          <input type="text" class="field lg-item-label" data-key="${key}"
                  value="${escapeHtml(customLabel != null ? customLabel : f.name)}"
                  placeholder="${escapeHtml(f.name)}"
                  style="flex:1; min-width:0; font-size:12px; padding:4px 6px;" />
@@ -7654,19 +7729,18 @@
     };
 
     let body = '';
-    if (!state.features.length) {
+    const groupRows = state.groups.map(renderGroupRow).filter(Boolean).join('');
+    const ungrouped = state.features.filter((f) => !f.groupId);
+    if (!groupRows && !ungrouped.length) {
       body = `<div class="empty-state">${t('legend_none')}</div>`;
     } else {
-      for (const g of state.groups) {
-        const members = state.features.filter((f) => f.groupId === g.id);
-        if (!members.length) continue;
-        body += `<div class="field-label" style="margin:10px 0 4px;">${escapeHtml(g.name)}</div>`;
-        body += members.map(renderItem).join('');
+      if (groupRows) {
+        body += `<div class="field-label" style="margin:10px 0 4px;">${t('legend_layers')}</div>`;
+        body += groupRows;
       }
-      const ungrouped = state.features.filter((f) => !f.groupId);
       if (ungrouped.length) {
         body += `<div class="field-label" style="margin:10px 0 4px;">${t('legend_ungrouped')}</div>`;
-        body += ungrouped.map(renderItem).join('');
+        body += ungrouped.map(renderUngroupedRow).join('');
       }
     }
 
@@ -7723,6 +7797,11 @@
     });
     if (lgTitle) lgTitle.addEventListener('input', () => {
       cfg.title = lgTitle.value;
+      cfg.titleIsDefault = (lgTitle.value.trim() === t('panel_legend') || !lgTitle.value.trim());
+      if (!lgTitle.value.trim()) {
+        cfg.title = t('panel_legend');
+        cfg.titleIsDefault = true;
+      }
       updateLegendBox();
     });
     if (lgPosition) lgPosition.addEventListener('change', () => {
@@ -7742,25 +7821,26 @@
 
     root.querySelectorAll('.lg-item-toggle').forEach(cb => {
       cb.addEventListener('change', () => {
-        const id = cb.dataset.id;
+        const key = cb.dataset.key;
+        if (!key) return;
         if (!Array.isArray(cfg.selectedIds)) {
           cfg.selectedIds = legendDefaultSelectedIds();
         }
         if (cb.checked) {
-          if (!cfg.selectedIds.includes(id)) cfg.selectedIds.push(id);
+          if (!cfg.selectedIds.includes(key)) cfg.selectedIds.push(key);
         } else {
-          cfg.selectedIds = cfg.selectedIds.filter(x => x !== id);
+          cfg.selectedIds = cfg.selectedIds.filter(x => x !== key);
         }
         updateLegendBox();
       });
     });
-    // Per-item text inputs: override the display label
     root.querySelectorAll('.lg-item-label').forEach(inp => {
       inp.addEventListener('input', () => {
-        const id = inp.dataset.id;
+        const key = inp.dataset.key;
+        if (!key) return;
         const v = inp.value.trim();
-        if (v) cfg.labelOverrides[id] = v;
-        else delete cfg.labelOverrides[id];
+        if (v) cfg.labelOverrides[key] = v;
+        else delete cfg.labelOverrides[key];
         updateLegendBox();
       });
     });
@@ -7799,6 +7879,7 @@
       if (saved.height) box.style.height = saved.height + 'px';
     } else {
       box.style.top = box.style.bottom = box.style.left = box.style.right = 'auto';
+      box.style.width = box.style.height = '';
       const pos = cfg.position || 'bottom-right';
       if (pos === 'top-left') { box.style.top = '60px'; box.style.left = '74px'; }
       else if (pos === 'top-right') { box.style.top = '60px'; box.style.right = '10px'; }
@@ -7807,71 +7888,101 @@
     }
 
     const selectedIds = Array.isArray(cfg.selectedIds) ? cfg.selectedIds : legendDefaultSelectedIds();
+    const selected = new Set(selectedIds);
     const overrides = cfg.labelOverrides || {};
-    const items = state.features.filter((f) => selectedIds.includes(f.id));
-
-    // Group rows: layers first, then ungrouped (if any selected).
-    const sections = [];
-    for (const g of state.groups) {
-      const members = items.filter((f) => f.groupId === g.id);
-      if (!members.length) continue;
-      sections.push({ title: g.name, members });
-    }
-    const ungrouped = items.filter((f) => !f.groupId);
-    if (ungrouped.length) sections.push({ title: t('legend_ungrouped'), members: ungrouped });
-
+    const edges = '<div class="lg-edge e" data-edge="e"></div><div class="lg-edge s" data-edge="s"></div><div class="lg-edge se" data-edge="se"></div>';
     const header = `<div class="lg-drag">${escapeHtml(cfg.title || t('panel_legend'))}</div>`;
-    if (!items.length) {
-      box.innerHTML = header + `<div style="color:var(--ink-2); font-style:italic;">${t('legend_empty')}</div>`;
-      return;
+
+    const rows = [];
+    for (const g of state.groups) {
+      const key = 'g:' + g.id;
+      if (!selected.has(key)) continue;
+      const members = state.features.filter((f) => f.groupId === g.id);
+      if (!members.length) continue;
+      const sample = members[0];
+      const swatch = sample.kind === 'line'
+        ? `<span style="display:inline-block; width:14px; height:3px; background:${sample.style.stroke}; margin-right:6px; vertical-align:middle;"></span>`
+        : `<span style="display:inline-block; width:12px; height:12px; background:${sample.style.fill}; border:1px solid ${sample.style.stroke}; margin-right:6px; vertical-align:middle; border-radius:2px;"></span>`;
+      rows.push(`<div style="margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${swatch}${escapeHtml(overrides[key] || g.name)}</div>`);
     }
-    const rows = sections.map((sec) => {
-      const title = `<div class="lg-group-title">${escapeHtml(sec.title)}</div>`;
-      const body = sec.members.map((f) => {
+    const ungroupedSel = state.features.filter((f) => !f.groupId && selected.has('f:' + f.id));
+    if (ungroupedSel.length) {
+      rows.push(`<div class="lg-group-title">${escapeHtml(t('legend_ungrouped'))}</div>`);
+      for (const f of ungroupedSel) {
+        const key = 'f:' + f.id;
         const swatch = f.kind === 'line'
           ? `<span style="display:inline-block; width:14px; height:3px; background:${f.style.stroke}; margin-right:6px; vertical-align:middle;"></span>`
           : `<span style="display:inline-block; width:12px; height:12px; background:${f.style.fill}; border:1px solid ${f.style.stroke}; margin-right:6px; vertical-align:middle; border-radius:2px;"></span>`;
-        return `<div style="margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${swatch}${escapeHtml(overrides[f.id] || f.name)}</div>`;
-      }).join('');
-      return title + body;
-    }).join('');
-    box.innerHTML = header + rows;
+        rows.push(`<div style="margin-bottom:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${swatch}${escapeHtml(overrides[key] || f.name)}</div>`);
+      }
+    }
+
+    if (!rows.length) {
+      box.innerHTML = edges + header + `<div style="color:var(--ink-2); font-style:italic;">${t('legend_empty')}</div>`;
+      return;
+    }
+    box.innerHTML = edges + header + rows.join('');
   }
 
   function installLegendBoxInteractions(box) {
     if (box._lgReady) return;
     box._lgReady = true;
-    let dragging = false, ox = 0, oy = 0;
+    let dragging = false, resizing = false, ox = 0, oy = 0, startW = 0, startH = 0, startL = 0, startT = 0, edge = '';
+    const persistBox = () => {
+      ensureLegendState();
+      const r = box.getBoundingClientRect();
+      state._legend.box = { left: r.left, top: r.top, width: r.width, height: r.height };
+      try { saveState(); } catch (_) {}
+    };
     const onDown = (e) => {
+      const edgeEl = e.target.closest('.lg-edge');
       const handle = e.target.closest('.lg-drag');
-      if (!handle) return;
-      dragging = true;
+      if (!edgeEl && !handle) return;
       const r = box.getBoundingClientRect();
       const pt = e.touches ? e.touches[0] : e;
-      ox = pt.clientX - r.left;
-      oy = pt.clientY - r.top;
+      if (edgeEl) {
+        resizing = true;
+        edge = edgeEl.dataset.edge || 'se';
+        startW = r.width; startH = r.height;
+        startL = r.left; startT = r.top;
+        ox = pt.clientX; oy = pt.clientY;
+      } else {
+        dragging = true;
+        ox = pt.clientX - r.left;
+        oy = pt.clientY - r.top;
+      }
       e.preventDefault();
     };
     const onMove = (e) => {
-      if (!dragging) return;
       const pt = e.touches ? e.touches[0] : e;
-      const left = Math.max(4, Math.min(window.innerWidth - 40, pt.clientX - ox));
-      const top = Math.max(4, Math.min(window.innerHeight - 40, pt.clientY - oy));
-      box.style.left = left + 'px';
-      box.style.top = top + 'px';
-      box.style.right = 'auto';
-      box.style.bottom = 'auto';
+      if (dragging) {
+        const left = Math.max(4, Math.min(window.innerWidth - 40, pt.clientX - ox));
+        const top = Math.max(4, Math.min(window.innerHeight - 40, pt.clientY - oy));
+        box.style.left = left + 'px';
+        box.style.top = top + 'px';
+        box.style.right = 'auto';
+        box.style.bottom = 'auto';
+      } else if (resizing) {
+        const dx = pt.clientX - ox;
+        const dy = pt.clientY - oy;
+        if (edge.includes('e')) {
+          box.style.width = Math.max(120, Math.min(window.innerWidth * 0.7, startW + dx)) + 'px';
+        }
+        if (edge.includes('s')) {
+          box.style.height = Math.max(48, Math.min(window.innerHeight * 0.7, startH + dy)) + 'px';
+        }
+        box.style.left = startL + 'px';
+        box.style.top = startT + 'px';
+        box.style.right = 'auto';
+        box.style.bottom = 'auto';
+        if (e.cancelable) e.preventDefault();
+      }
     };
     const onUp = () => {
-      if (!dragging) return;
+      if (!dragging && !resizing) return;
       dragging = false;
-      ensureLegendState();
-      const r = box.getBoundingClientRect();
-      state._legend.box = {
-        left: r.left, top: r.top,
-        width: r.width, height: r.height,
-      };
-      try { saveState(); } catch (_) {}
+      resizing = false;
+      persistBox();
     };
     box.addEventListener('mousedown', onDown);
     box.addEventListener('touchstart', onDown, { passive: false });
@@ -7879,19 +7990,6 @@
     window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp);
-    // Persist size after CSS resize.
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => {
-        if (!state._legend || !state._legend.enabled) return;
-        const r = box.getBoundingClientRect();
-        if (r.width < 40 || r.height < 30) return;
-        state._legend.box = {
-          left: r.left, top: r.top,
-          width: r.width, height: r.height,
-        };
-      });
-      ro.observe(box);
-    }
   }
 
   // Lazy-create the contour rendering layer. Contours go in their own
@@ -7938,10 +8036,28 @@
       if (!map.getLayer('app-derived-line')) {
         map.addLayer({
           id: 'app-derived-line', type: 'line', source: 'app-derived',
-          filter: ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]],
+          filter: ['all',
+            ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]],
+            ['!=', ['get', 'dashed'], true],
+          ],
           paint: {
             'line-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
             'line-width': ['coalesce', ['get', 'strokeWidth'], 2.5],
+          },
+        });
+      }
+      if (!map.getLayer('app-derived-line-dash')) {
+        map.addLayer({
+          id: 'app-derived-line-dash', type: 'line', source: 'app-derived',
+          filter: ['all',
+            ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]],
+            ['==', ['get', 'dashed'], true],
+          ],
+          paint: {
+            'line-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
+            'line-width': ['coalesce', ['get', 'strokeWidth'], 2.5],
+            'line-opacity': 0.9,
+            'line-dasharray': [1.2, 1.6],
           },
         });
       }
@@ -8019,13 +8135,14 @@
               fill: f.style.fill,
               fillOpacity: f.style.fillOpacity,
               isNav: !!(f.geojson.properties && f.geojson.properties._navPoint),
+              dashed: !!(f.geojson.properties && f.geojson.properties._routeDash),
             },
           })),
         });
       }
       // Keep above td-* on every sync.
       for (const id of ['app-derived-fill', 'app-derived-outline', 'app-derived-line',
-        'app-derived-point', 'app-contours-line',
+        'app-derived-line-dash', 'app-derived-point', 'app-contours-line',
         'app-contour-labels-symbol', 'app-contour-labels-point']) {
         if (map.getLayer(id)) try { map.moveLayer(id); } catch (_) {}
       }
@@ -9858,19 +9975,13 @@
           layers: t('panel_layers'),
           style: t('panel_style'),
           measure: t('panel_measure'),
-          coordinates: 'Coord.',
+          coordinates: t('panel_coordinates'),
           search: t('panel_search'),
-          tools: 'Tools',
+          tools: t('panel_tools'),
           options: t('panel_options'),
           files: t('panel_files'),
+          legend: t('panel_legend'),
         };
-        if (I18N.getLang() === 'fr') {
-          Object.assign(short, {
-            layers: 'Calques', style: 'Style', measure: 'Propriétés',
-            coordinates: 'Coord.', search: 'Aller à', tools: 'Outils',
-            options: 'Options', files: 'Fichiers',
-          });
-        }
         if (short[id]) lbl.textContent = short[id];
       }
     });
@@ -9882,11 +9993,18 @@
       ddToggle.setAttribute('aria-label', t('draw_defaults'));
       ddToggle.removeAttribute('data-label');
     }
-    const optToggle = document.getElementById('opt-toggle');
-    if (optToggle) {
-      optToggle.title = t('options_title');
-      optToggle.setAttribute('aria-label', t('options_title'));
+    const cleanBtn = document.getElementById('vc-clean-view');
+    if (cleanBtn) {
+      cleanBtn.title = t('clean_view');
+      cleanBtn.setAttribute('aria-label', t('clean_view'));
     }
+    try {
+      ensureLegendState();
+      if (state._legend && state._legend.titleIsDefault) {
+        state._legend.title = t('panel_legend');
+        updateLegendBox();
+      }
+    } catch (_) {}
     const exit = document.getElementById('clean-view-exit');
     if (exit) exit.textContent = t('clean_view_exit');
   }
@@ -9979,19 +10097,11 @@
     el.textContent = text || '';
     el.style.color = kind === 'err' ? 'var(--danger)' : kind === 'ok' ? 'var(--success)' : 'var(--ink-1)';
   }
-  function startRoutePick(msgEl, btn) {
-    if (_routePick) {
-      try { _routePick.abort({ silent: true }); } catch (_) {}
-      _routePick = null;
-    }
-    _routeLastMsg = null;
-    const setMsg = (s, kind) => {
-      _routeLastMsg = s ? { text: s, kind: kind || '' } : null;
-      _applyRouteMsg(msgEl, s, kind);
-    };
-    if (btn) btn.disabled = true;
-
-    // Free the map: hide tools sheet + collapse draw drawer (same pattern as coord pick).
+  function setRouteEndpoint(which, pt) {
+    if (!state._route) state._route = { a: null, b: null };
+    state._route[which] = pt;
+  }
+  function _routeHideUiForPick() {
     const wasMobileSheetOpen = ui.isMobile()
       && document.getElementById('sheet')?.classList.contains('visible');
     if (wasMobileSheetOpen) {
@@ -10004,14 +10114,46 @@
       if (drawer) drawer.classList.add('collapsed');
       if (drawToggle) drawToggle.classList.remove('active');
     } catch (_) {}
-
+    return wasMobileSheetOpen;
+  }
+  function setRouteEndpointFromGps(which, msgEl) {
+    const setMsg = (s, kind) => {
+      _routeLastMsg = s ? { text: s, kind: kind || '' } : null;
+      _applyRouteMsg(msgEl, s, kind);
+    };
+    if (!navigator.geolocation) {
+      setMsg(t('route_gps_unsupported'), 'err');
+      return;
+    }
+    setMsg(t('route_gps_waiting'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lng = pos.coords.longitude, lat = pos.coords.latitude;
+        setRouteEndpoint(which, { lng, lat, label: t('route_my_location') });
+        setMsg(t('route_gps_ok'), 'ok');
+        try { map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 600 }); } catch (_) {}
+        ui.render();
+      },
+      (err) => {
+        log.warn('[route gps]', err);
+        setMsg(t('route_gps_err'), 'err');
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+    );
+  }
+  function startRouteEndpointPick(which, msgEl) {
+    if (_routePick) {
+      try { _routePick.abort({ silent: true }); } catch (_) {}
+      _routePick = null;
+    }
+    const setMsg = (s, kind) => {
+      _routeLastMsg = s ? { text: s, kind: kind || '' } : null;
+      _applyRouteMsg(msgEl, s, kind);
+    };
+    const wasMobileSheetOpen = _routeHideUiForPick();
     const banner = ensurePickBanner();
-    banner.textContent = t('route_banner_a');
+    banner.textContent = which === 'a' ? t('route_banner_a') : t('route_banner_b');
     banner.classList.add('visible');
-
-    let pointA = null;
-    let markerA = null;
-    let markerB = null;
     const canvas = map.getCanvas();
     canvas.style.cursor = 'crosshair';
     let prevMode = null;
@@ -10019,123 +10161,158 @@
       const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
       if (td) { prevMode = td.getMode(); td.setMode('static'); }
     } catch (_) {}
-
-    const clearMarkers = () => {
-      try { if (markerA) markerA.remove(); } catch (_) {}
-      try { if (markerB) markerB.remove(); } catch (_) {}
-      markerA = markerB = null;
-    };
-    const restoreMode = () => {
-      try {
-        const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
-        if (td && prevMode && prevMode !== 'static') td.setMode(prevMode);
-      } catch (_) {}
-    };
-    const reopenSheet = () => {
-      if (wasMobileSheetOpen) {
-        try { ui.openSheet('tools'); } catch (_) {}
-      }
-      // Re-apply status into the freshly rendered tools panel.
-      setTimeout(() => {
-        if (!_routeLastMsg) return;
-        _applyRouteMsg(document.getElementById('rt-msg'), _routeLastMsg.text, _routeLastMsg.kind);
-      }, 80);
-    };
-    let finished = false;
+    let marker = null;
     const cleanupUi = () => {
-      if (finished) return;
-      finished = true;
       canvas.style.cursor = '';
       banner.classList.remove('visible');
       banner.onclick = null;
       map.off('click', onClick);
-      restoreMode();
-      if (btn) btn.disabled = false;
+      try {
+        const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
+        if (td && prevMode && prevMode !== 'static') td.setMode(prevMode);
+      } catch (_) {}
       _routePick = null;
+    };
+    const reopenSheet = () => {
+      if (wasMobileSheetOpen) {
+        try { ui.openSheet('tools'); } catch (_) {}
+      } else {
+        try { ui.render(); } catch (_) {}
+      }
     };
     const abort = (opts) => {
       cleanupUi();
-      clearMarkers();
-      _routeLastMsg = null;
+      try { if (marker) marker.remove(); } catch (_) {}
       if (!(opts && opts.silent)) reopenSheet();
     };
     _routePick = { abort };
-
     banner.onclick = () => abort();
-
-    async function onClick(e) {
+    function onClick(e) {
       const { lng, lat } = e.lngLat;
-      if (!pointA) {
-        pointA = [lng, lat];
-        try {
-          markerA = _makeRoutePickMarker('A', false).setLngLat([lng, lat]).addTo(map);
-        } catch (_) {}
-        banner.textContent = t('route_banner_b');
-        setMsg(t('route_pick_b'));
-        return;
-      }
+      setRouteEndpoint(which, { lng, lat, label: `${lng.toFixed(5)}, ${lat.toFixed(5)}` });
       try {
-        markerB = _makeRoutePickMarker('B', true).setLngLat([lng, lat]).addTo(map);
+        marker = _makeRoutePickMarker(which === 'a' ? 'A' : 'B', which === 'b')
+          .setLngLat([lng, lat]).addTo(map);
+        setTimeout(() => { try { marker.remove(); } catch (_) {} }, 2500);
       } catch (_) {}
-      map.off('click', onClick);
-      canvas.style.cursor = '';
-      banner.textContent = t('route_computing');
-      setMsg(t('route_computing'));
-      try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${pointA[0]},${pointA[1]};${lng},${lat}?overview=full&geometries=geojson`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const route = data && data.routes && data.routes[0];
-        if (!route || !route.geometry) throw new Error('no route');
-        const km = (route.distance || 0) / 1000;
-        const newF = addFeature(
-          { type: 'Feature', geometry: route.geometry, properties: { _derived: true, _derivedKind: 'route' } },
-          'line',
-          { name: `Route (${km.toFixed(1)} km)`, style: { stroke: '#3aa0ff', strokeWidth: 3.5, fill: '#3aa0ff', fillOpacity: 0 } }
-        );
-        pushFeatureToTerraDraw(newF);
-        notifyFeatures();
-        setMsg(t('route_ok') + ` · ${km.toFixed(1)} km`, 'ok');
-        try {
-          const bb = turf.bbox(route.geometry);
-          map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, duration: 600 });
-        } catch (_) {}
-        setTimeout(clearMarkers, 4000);
-        cleanupUi();
-        reopenSheet();
-      } catch (err) {
-        log.warn('[route]', err);
-        clearMarkers();
-        setMsg(t('route_err'), 'err');
-        cleanupUi();
-        reopenSheet();
-      }
+      cleanupUi();
+      setMsg(which === 'a' ? t('route_pick_a_done') : t('route_pick_b_done'), 'ok');
+      reopenSheet();
     }
     map.on('click', onClick);
-    setMsg(t('route_pick_a'));
+    setMsg(which === 'a' ? t('route_pick_a') : t('route_pick_b'));
   }
+
+  async function computeRouteAB(msgEl, btn) {
+    if (!state._route || !state._route.a || !state._route.b) {
+      _applyRouteMsg(msgEl, t('route_need_ab'), 'err');
+      return;
+    }
+    const pointA = [state._route.a.lng, state._route.a.lat];
+    const pointB = [state._route.b.lng, state._route.b.lat];
+    const setMsg = (s, kind) => {
+      _routeLastMsg = s ? { text: s, kind: kind || '' } : null;
+      _applyRouteMsg(msgEl, s, kind);
+    };
+    if (btn) btn.disabled = true;
+    setMsg(t('route_computing'));
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${pointA[0]},${pointA[1]};${pointB[0]},${pointB[1]}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const route = data && data.routes && data.routes[0];
+      if (!route || !route.geometry || !route.geometry.coordinates || !route.geometry.coordinates.length) {
+        throw new Error('no route');
+      }
+      const wps = data.waypoints || [];
+      const snapA = (wps[0] && wps[0].location) || route.geometry.coordinates[0];
+      const snapB = (wps[wps.length - 1] && wps[wps.length - 1].location)
+        || route.geometry.coordinates[route.geometry.coordinates.length - 1];
+      const gapM = (p, q) => {
+        try { return turf.distance(turf.point(p), turf.point(q), { units: 'meters' }); }
+        catch (_) { return 0; }
+      };
+      const bundleId = 'route-' + Date.now();
+      const km = (route.distance || 0) / 1000;
+      const styleSolid = { stroke: '#3aa0ff', strokeWidth: 3.5, fill: '#3aa0ff', fillOpacity: 0 };
+      const styleDash = { stroke: '#3aa0ff', strokeWidth: 2.5, fill: '#3aa0ff', fillOpacity: 0 };
+      const created = [];
+      const addDash = (from, to, tag) => {
+        if (gapM(from, to) < 6) return;
+        const f = addFeature(
+          {
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [from, to] },
+            properties: { _derived: true, _derivedKind: 'route', _routeDash: true, _routeBundle: bundleId },
+          },
+          'line',
+          { name: `Route · ${tag}`, style: styleDash, applyDrawDefaults: false }
+        );
+        created.push(f);
+      };
+      addDash(pointA, snapA, 'A→road');
+      const main = addFeature(
+        {
+          type: 'Feature',
+          geometry: route.geometry,
+          properties: { _derived: true, _derivedKind: 'route', _routeBundle: bundleId },
+        },
+        'line',
+        { name: `Route (${km.toFixed(1)} km)`, style: styleSolid, applyDrawDefaults: false }
+      );
+      created.push(main);
+      addDash(snapB, pointB, 'road→B');
+      created.forEach((f) => { try { /* derived: no terra-draw */ } catch (_) {} });
+      notifyFeatures();
+      try { syncDerivedLayer(); } catch (_) {}
+      setMsg(t('route_ok') + ` · ${km.toFixed(1)} km`, 'ok');
+      try {
+        const allCoords = [pointA, ...route.geometry.coordinates, pointB];
+        const line = turf.lineString(allCoords);
+        const bb = turf.bbox(line);
+        map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, duration: 600 });
+      } catch (_) {}
+    } catch (err) {
+      log.warn('[route]', err);
+      setMsg(t('route_err'), 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // Legacy name kept for cancel hooks
+  function startRoutePick() { /* replaced by endpoint pick + compute */ }
 
   // Wire options UI once the draw toolbar (and #app-options) exist.
   setTimeout(initAppOptionsUi, 600);
   setTimeout(initAppOptionsUi, 1600);
 
-  /* ═══ 13. SHEET SWIPE-DOWN ══════════════════════════════════════════════════ */
+  /* ═══ 13. SHEET SWIPE (down in portrait, right in landscape) ═══════════════ */
   (function () {
     const handle = document.getElementById('sheet-handle');
     const sheet = document.getElementById('sheet');
-    let startY = 0, dy = 0, tracking = false;
+    let startX = 0, startY = 0, dx = 0, dy = 0, tracking = false;
+    const isLandscapeSheet = () =>
+      window.matchMedia('(max-height: 520px) and (orientation: landscape)').matches;
 
     handle.addEventListener('touchstart', (e) => {
       tracking = true;
+      startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
+      dx = 0; dy = 0;
       sheet.style.transition = 'none';
     }, { passive: true });
 
     handle.addEventListener('touchmove', (e) => {
       if (!tracking) return;
-      dy = Math.max(0, e.touches[0].clientY - startY);
-      sheet.style.transform = `translateY(${dy}px)`;
+      if (isLandscapeSheet()) {
+        dx = Math.max(0, e.touches[0].clientX - startX);
+        sheet.style.transform = `translateX(${dx}px)`;
+      } else {
+        dy = Math.max(0, e.touches[0].clientY - startY);
+        sheet.style.transform = `translateY(${dy}px)`;
+      }
     }, { passive: true });
 
     handle.addEventListener('touchend', () => {
@@ -10143,8 +10320,8 @@
       tracking = false;
       sheet.style.transition = '';
       sheet.style.transform = '';
-      if (dy > 60) ui.closeSheet();
-      dy = 0;
+      if (isLandscapeSheet() ? dx > 60 : dy > 60) ui.closeSheet();
+      dx = 0; dy = 0;
     });
   })();
 
