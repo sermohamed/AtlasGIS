@@ -702,42 +702,43 @@
       font-size: 11px; padding: 3px 6px;
     }
 
-    /* ─── Draw defaults (inside the draw drawer) + App options (next to draw) ─── */
+    /* ─── Draw defaults (gear ABOVE tools, icon-only) + App options ─── */
     #draw-drawer #draw-defaults {
-      position: static;
+      position: relative;
       display: block;
-      width: 100%;
-      max-width: none;
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px solid var(--line);
+      width: 44px;
+      max-width: 44px;
+      margin: 0 0 4px 0;
+      padding: 0;
+      border: none;
       pointer-events: auto;
+      z-index: 2;
     }
     #draw-drawer #draw-defaults .dd-toggle {
-      width: 100%;
-      height: 36px;
-      border-radius: 6px;
-      justify-content: flex-start;
-      gap: 8px;
-      padding: 0 10px;
-      font-size: 12px;
+      width: 44px !important;
+      height: 44px !important;
+      border-radius: 8px;
+      justify-content: center;
+      gap: 0;
+      padding: 0;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
     }
-    #draw-drawer #draw-defaults .dd-toggle::after {
-      content: attr(data-label);
-      font-weight: 500;
-    }
+    /* Panel floats to the right so the drawer stays 44px wide */
     #draw-drawer #draw-defaults .dd-panel {
-      left: 0; right: 0; top: auto; margin-top: 4px;
-      min-width: 0; width: 100%;
+      left: 50px;
+      right: auto;
+      top: 0;
+      margin-top: 0;
+      min-width: 220px;
+      width: 240px;
+      max-width: min(280px, calc(100vw - 80px));
     }
     #draw-defaults {
-      position: static;
-      display: flex;
-      flex-direction: row;
-      align-items: flex-start;
-      gap: 4px;
+      position: relative;
+      display: block;
       pointer-events: none;
-      max-width: min(280px, calc(100vw - 120px));
+      width: 44px;
+      max-width: 44px;
     }
     #app-options {
       position: relative;
@@ -820,7 +821,18 @@
       gap: 4px;
       pointer-events: none;
     }
-    #draw-defaults { position: relative; }
+    /* Temporary A/B markers while picking a route */
+    .route-pick-marker {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: #3aa0ff; color: #fff;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px rgba(58,160,255,0.45), 0 2px 8px rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center;
+      font: 700 12px/1 'JetBrains Mono', ui-monospace, monospace;
+      pointer-events: none;
+      user-select: none;
+    }
+    .route-pick-marker.b { background: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.45), 0 2px 8px rgba(0,0,0,0.45); }
 
     /* Label handle: a move puck (drag to reposition the label) with a rotate
        knob clipped to its upper-right (drag to spin the label, tap to reset). */
@@ -1060,7 +1072,9 @@
     }
     #draw-drawer {
       pointer-events: auto;
-      overflow: hidden;
+      overflow: visible; /* allow gear panel to float right */
+      width: 44px;
+      max-width: 44px;
       max-height: 800px;
       opacity: 1;
       transform: translateY(0);
@@ -1070,6 +1084,7 @@
       max-height: 0;
       opacity: 0;
       pointer-events: none;
+      overflow: hidden;
       transform: translateY(-6px);
     }
     /* Style the terra-draw buttons inside the drawer */
@@ -1169,7 +1184,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-29·al (UI pack)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-29·am (UI polish)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1504,6 +1519,7 @@
   var elevationHoverMarker = null;
   var gridState = { enabled: false, crs: 'wgs84', spacing: 0, showLabels: true };
   var labelHandleMarkers = new Map();
+  var _routeLastMsg = null; // last route status for tools panel after pick
 
   // Drop a visible pin at the given lng/lat, replacing any previous fly-to
   // marker. Used by both the Coordinates "Aller à" button and tapping a
@@ -2854,7 +2870,7 @@
     if (banner) return banner;
     banner = document.createElement('div');
     banner.id = 'pick-banner';
-    banner.textContent = '📍 Touchez la carte pour choisir un point — touchez ici pour annuler';
+    banner.textContent = t('pick_banner');
     document.body.appendChild(banner);
     return banner;
   }
@@ -4583,6 +4599,13 @@
             drawer.id = 'draw-drawer';
             drawer.classList.add('collapsed');
 
+            // Layer defaults gear ABOVE the draw tools (compact icon, drawer stays 44px).
+            const ddEl = document.getElementById('draw-defaults');
+            if (ddEl) {
+              drawer.appendChild(ddEl);
+              ddEl.style.removeProperty('display');
+            }
+
             // Move terra-draw ctrl group from MapLibre's container into our drawer
             drawer.appendChild(tdCtrl);
 
@@ -4590,13 +4613,6 @@
             const row = document.createElement('div');
             row.id = 'draw-toolbar-row';
             row.appendChild(toggle);
-
-            // Layer defaults gear lives INSIDE the draw drawer (H).
-            const ddEl = document.getElementById('draw-defaults');
-            if (ddEl) {
-              drawer.appendChild(ddEl);
-              ddEl.style.removeProperty('display');
-            }
 
             // Options button replaces the old gear slot next to draw (I).
             let optHost = document.getElementById('app-options');
@@ -4641,6 +4657,12 @@
               if (isOpen) {
                 drawer.classList.add('collapsed');
                 toggle.classList.remove('active');
+                try {
+                  const dd = document.getElementById('draw-defaults');
+                  const ddt = document.getElementById('dd-toggle');
+                  if (dd) dd.classList.remove('open');
+                  if (ddt) ddt.classList.remove('active');
+                } catch (_) {}
               } else {
                 drawer.classList.remove('collapsed');
                 toggle.classList.add('active');
@@ -6044,6 +6066,7 @@
     },
     setPanel(id) {
       if (id !== 'coordinates') { try { cancelCoordPickMode(); } catch (_) {} }
+      if (id !== 'tools') { try { cancelRoutePickMode(); } catch (_) {} }
       if (state.activePanel === id) {
         state.activePanel = null;
       } else {
@@ -6055,6 +6078,8 @@
       this.openSheet('menu');
     },
     openSheet(panelId) {
+      if (panelId !== 'coordinates') { try { cancelCoordPickMode(); } catch (_) {} }
+      if (panelId !== 'tools') { try { cancelRoutePickMode(); } catch (_) {} }
       state.activePanel = panelId;
       this.render();
       document.getElementById('scrim').classList.add('visible');
@@ -6062,6 +6087,7 @@
     },
     closeSheet() {
       try { cancelCoordPickMode(); } catch (_) {}
+      try { cancelRoutePickMode(); } catch (_) {}
       state.activePanel = null;
       document.getElementById('scrim').classList.remove('visible');
       document.getElementById('sheet').classList.remove('visible');
@@ -6505,13 +6531,20 @@
   function mountDrawDefaultsInToolbar() {
     const drawer = document.getElementById('draw-drawer');
     const dd = document.getElementById('draw-defaults');
-    if (drawer && dd && dd.parentElement !== drawer) {
-      drawer.appendChild(dd);
-    }
-    if (dd) {
+    if (drawer && dd) {
+      // Keep gear as the first child (above TerraDraw tools).
+      const firstTool = drawer.querySelector('.maplibregl-ctrl-group');
+      if (dd.parentElement !== drawer || (firstTool && dd.nextElementSibling !== firstTool)) {
+        if (firstTool) drawer.insertBefore(dd, firstTool);
+        else drawer.prepend(dd);
+      }
       dd.style.removeProperty('display');
-      const toggle = document.getElementById('dd-toggle');
-      if (toggle) toggle.setAttribute('data-label', t('draw_defaults'));
+    }
+    const toggle = document.getElementById('dd-toggle');
+    if (toggle) {
+      toggle.title = t('draw_defaults');
+      toggle.setAttribute('aria-label', t('draw_defaults'));
+      toggle.removeAttribute('data-label');
     }
     const row = document.getElementById('draw-toolbar-row');
     const opt = document.getElementById('app-options');
@@ -6567,6 +6600,11 @@
       e.stopPropagation();
       wrap.classList.toggle('open');
       toggle.classList.toggle('active', wrap.classList.contains('open'));
+      // Close app-options if open (only one popover at a time).
+      try {
+        const opt = document.getElementById('app-options');
+        if (opt) opt.classList.remove('open');
+      } catch (_) {}
       syncFromState();
     });
 
@@ -6964,6 +7002,9 @@
 
     const rtBtn = root.querySelector('#rt-start');
     const rtMsg = root.querySelector('#rt-msg');
+    if (rtMsg && _routeLastMsg) {
+      _applyRouteMsg(rtMsg, _routeLastMsg.text, _routeLastMsg.kind);
+    }
     if (rtBtn) {
       rtBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -8451,6 +8492,7 @@
       // Show a top-screen banner so the user knows pick is active and has
       // a way to cancel without finding the original button.
       const banner = ensurePickBanner();
+      banner.textContent = t('pick_banner');
       banner.classList.add('visible');
       const restoreMode = () => {
         try {
@@ -9837,7 +9879,8 @@
     const ddToggle = document.getElementById('dd-toggle');
     if (ddToggle) {
       ddToggle.title = t('draw_defaults');
-      ddToggle.setAttribute('data-label', t('draw_defaults'));
+      ddToggle.setAttribute('aria-label', t('draw_defaults'));
+      ddToggle.removeAttribute('data-label');
     }
     const optToggle = document.getElementById('opt-toggle');
     if (optToggle) {
@@ -9857,6 +9900,13 @@
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         wrap.classList.toggle('open');
+        // Close draw-defaults if open (only one popover at a time).
+        try {
+          const dd = document.getElementById('draw-defaults');
+          const ddt = document.getElementById('dd-toggle');
+          if (dd) dd.classList.remove('open');
+          if (ddt) ddt.classList.remove('active');
+        } catch (_) {}
         syncAppOptionsUi();
       });
       document.addEventListener('click', (e) => {
@@ -9913,19 +9963,55 @@
 
   /* ═══ Route A → B (OSRM) ═══════════════════════════════════════════════════ */
   let _routePick = null;
+  function cancelRoutePickMode() {
+    if (!_routePick) return;
+    try { _routePick.abort({ silent: true }); } catch (_) {}
+    _routePick = null;
+  }
+  function _makeRoutePickMarker(letter, isB) {
+    const el = document.createElement('div');
+    el.className = 'route-pick-marker' + (isB ? ' b' : '');
+    el.textContent = letter;
+    return new maplibregl.Marker({ element: el, anchor: 'center' });
+  }
+  function _applyRouteMsg(el, text, kind) {
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = kind === 'err' ? 'var(--danger)' : kind === 'ok' ? 'var(--success)' : 'var(--ink-1)';
+  }
   function startRoutePick(msgEl, btn) {
     if (_routePick) {
-      try { _routePick.abort(); } catch (_) {}
+      try { _routePick.abort({ silent: true }); } catch (_) {}
       _routePick = null;
     }
+    _routeLastMsg = null;
     const setMsg = (s, kind) => {
-      if (!msgEl) return;
-      msgEl.textContent = s || '';
-      msgEl.style.color = kind === 'err' ? 'var(--danger)' : kind === 'ok' ? 'var(--success)' : 'var(--ink-1)';
+      _routeLastMsg = s ? { text: s, kind: kind || '' } : null;
+      _applyRouteMsg(msgEl, s, kind);
     };
-    setMsg(t('route_pick_a'));
     if (btn) btn.disabled = true;
+
+    // Free the map: hide tools sheet + collapse draw drawer (same pattern as coord pick).
+    const wasMobileSheetOpen = ui.isMobile()
+      && document.getElementById('sheet')?.classList.contains('visible');
+    if (wasMobileSheetOpen) {
+      document.getElementById('scrim')?.classList.remove('visible');
+      document.getElementById('sheet')?.classList.remove('visible');
+    }
+    try {
+      const drawer = document.getElementById('draw-drawer');
+      const drawToggle = document.getElementById('draw-toggle-btn');
+      if (drawer) drawer.classList.add('collapsed');
+      if (drawToggle) drawToggle.classList.remove('active');
+    } catch (_) {}
+
+    const banner = ensurePickBanner();
+    banner.textContent = t('route_banner_a');
+    banner.classList.add('visible');
+
     let pointA = null;
+    let markerA = null;
+    let markerB = null;
     const canvas = map.getCanvas();
     canvas.style.cursor = 'crosshair';
     let prevMode = null;
@@ -9934,27 +10020,67 @@
       if (td) { prevMode = td.getMode(); td.setMode('static'); }
     } catch (_) {}
 
-    const cleanup = () => {
-      canvas.style.cursor = '';
-      map.off('click', onClick);
+    const clearMarkers = () => {
+      try { if (markerA) markerA.remove(); } catch (_) {}
+      try { if (markerB) markerB.remove(); } catch (_) {}
+      markerA = markerB = null;
+    };
+    const restoreMode = () => {
       try {
         const td = drawControl && drawControl.getTerraDrawInstance && drawControl.getTerraDrawInstance();
-        if (td && prevMode) td.setMode(prevMode);
+        if (td && prevMode && prevMode !== 'static') td.setMode(prevMode);
       } catch (_) {}
+    };
+    const reopenSheet = () => {
+      if (wasMobileSheetOpen) {
+        try { ui.openSheet('tools'); } catch (_) {}
+      }
+      // Re-apply status into the freshly rendered tools panel.
+      setTimeout(() => {
+        if (!_routeLastMsg) return;
+        _applyRouteMsg(document.getElementById('rt-msg'), _routeLastMsg.text, _routeLastMsg.kind);
+      }, 80);
+    };
+    let finished = false;
+    const cleanupUi = () => {
+      if (finished) return;
+      finished = true;
+      canvas.style.cursor = '';
+      banner.classList.remove('visible');
+      banner.onclick = null;
+      map.off('click', onClick);
+      restoreMode();
       if (btn) btn.disabled = false;
       _routePick = null;
     };
-    _routePick = { abort: cleanup };
+    const abort = (opts) => {
+      cleanupUi();
+      clearMarkers();
+      _routeLastMsg = null;
+      if (!(opts && opts.silent)) reopenSheet();
+    };
+    _routePick = { abort };
+
+    banner.onclick = () => abort();
 
     async function onClick(e) {
       const { lng, lat } = e.lngLat;
       if (!pointA) {
         pointA = [lng, lat];
+        try {
+          markerA = _makeRoutePickMarker('A', false).setLngLat([lng, lat]).addTo(map);
+        } catch (_) {}
+        banner.textContent = t('route_banner_b');
         setMsg(t('route_pick_b'));
         return;
       }
-      cleanup();
-      setMsg('…');
+      try {
+        markerB = _makeRoutePickMarker('B', true).setLngLat([lng, lat]).addTo(map);
+      } catch (_) {}
+      map.off('click', onClick);
+      canvas.style.cursor = '';
+      banner.textContent = t('route_computing');
+      setMsg(t('route_computing'));
       try {
         const url = `https://router.project-osrm.org/route/v1/driving/${pointA[0]},${pointA[1]};${lng},${lat}?overview=full&geometries=geojson`;
         const res = await fetch(url);
@@ -9975,12 +10101,19 @@
           const bb = turf.bbox(route.geometry);
           map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 60, duration: 600 });
         } catch (_) {}
+        setTimeout(clearMarkers, 4000);
+        cleanupUi();
+        reopenSheet();
       } catch (err) {
         log.warn('[route]', err);
+        clearMarkers();
         setMsg(t('route_err'), 'err');
+        cleanupUi();
+        reopenSheet();
       }
     }
     map.on('click', onClick);
+    setMsg(t('route_pick_a'));
   }
 
   // Wire options UI once the draw toolbar (and #app-options) exist.
