@@ -28,6 +28,9 @@
 
   <!-- file-saver (téléchargement des exports) -->
   <script src="vendor/FileSaver.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/shpjs@3.6.3/dist/shp.min.js"></script>
+  <script src="vendor/atlas-formats.js"></script>
   <script src="vendor/hgis-terradraw-adapter.js"></script>
   <script src="vendor/hgis-selection-adapter.js"></script>
   <script src="vendor/hgis-mode-adapter.js"></script>
@@ -1275,7 +1278,7 @@
   </style>
 </head>
 <body>
-  <div id="build-badge">Atlas GIS · build 2026-07-29·ao (compact UI)</div>
+  <div id="build-badge">Atlas GIS · build 2026-07-31·ap (props/style/io)</div>
   <div id="app">
     <!-- ═════ DESKTOP SIDEBAR ═════ -->
     <aside id="sidebar">
@@ -1350,33 +1353,43 @@
         </button>
         <div class="dd-panel" id="dd-panel">
           <div class="dd-row">
-            <label class="field-label">Couche cible</label>
+            <label class="field-label" id="dd-lbl-group">Couche cible</label>
             <select id="dd-group" class="field"></select>
             <button type="button" class="btn btn-ghost dd-new-group" id="dd-new-group">+ Nouvelle couche</button>
           </div>
           <div class="dd-row">
-            <label class="field-label">Contour</label>
+            <label class="field-label" id="dd-lbl-stroke">Contour</label>
             <div class="color-row">
               <input type="color" id="dd-stroke" />
               <input type="text" id="dd-stroke-hex" class="field" />
             </div>
           </div>
           <div class="dd-row">
-            <label class="field-label">Épaisseur</label>
+            <label class="field-label" id="dd-lbl-width">Épaisseur</label>
             <div class="slider-row">
               <input type="range" id="dd-width" min="0.5" max="10" step="0.5" />
               <span class="val" id="dd-width-val">2.5</span>
             </div>
           </div>
           <div class="dd-row">
-            <label class="field-label">Remplissage</label>
+            <label class="field-label" id="dd-lbl-linedash">Style de ligne</label>
+            <select id="dd-linedash" class="field">
+              <option value="solid">Continue</option>
+              <option value="dashed">Tirets</option>
+              <option value="dotted">Pointillés</option>
+              <option value="dashdot">Tiret-point</option>
+              <option value="longdash">Tirets longs</option>
+            </select>
+          </div>
+          <div class="dd-row">
+            <label class="field-label" id="dd-lbl-fill">Remplissage</label>
             <div class="color-row">
               <input type="color" id="dd-fill" />
               <input type="text" id="dd-fill-hex" class="field" />
             </div>
           </div>
           <div class="dd-row">
-            <label class="field-label">Opacité</label>
+            <label class="field-label" id="dd-lbl-opacity">Opacité</label>
             <div class="slider-row">
               <input type="range" id="dd-opacity" min="0" max="1" step="0.05" />
               <span class="val" id="dd-opacity-val">30%</span>
@@ -1385,10 +1398,28 @@
           <div class="dd-row">
             <label class="checkbox-row">
               <input type="checkbox" id="dd-label" />
-              <span>Masquer l'étiquette</span>
+              <span id="dd-lbl-hide">Masquer l'étiquette</span>
             </label>
           </div>
-          <div style="font-size:10px; color:var(--ink-2); margin-top:6px;">S'applique aux prochains objets dessinés.</div>
+          <div class="dd-row">
+            <label class="field-label" id="dd-lbl-labelsize">Taille d'étiquette</label>
+            <div class="slider-row">
+              <input type="range" id="dd-labelsize" min="8" max="28" step="1" />
+              <span class="val" id="dd-labelsize-val">12</span>
+            </div>
+          </div>
+          <div class="dd-row">
+            <label class="field-label" id="dd-lbl-labelcolor">Couleur d'étiquette</label>
+            <div class="color-row">
+              <input type="color" id="dd-labelcolor" />
+              <input type="text" id="dd-labelcolor-hex" class="field" />
+            </div>
+          </div>
+          <div class="dd-row">
+            <label class="field-label" id="dd-lbl-labelfont">Police d'étiquette</label>
+            <select id="dd-labelfont" class="field"></select>
+          </div>
+          <div id="dd-hint" style="font-size:10px; color:var(--ink-2); margin-top:6px;">S'applique aux prochains objets dessinés.</div>
         </div>
       </div>
       <div id="map"></div>
@@ -1494,7 +1525,7 @@
   </div>
 
   <!-- File input (hidden) -->
-  <input type="file" id="file-input" class="file-input" accept=".geojson,.json,.csv" multiple />
+  <input type="file" id="file-input" class="file-input" accept=".geojson,.json,.csv,.dxf,.dwg,.zip,.shp" multiple />
 
   <!-- Confirmation modal -->
   <div id="confirm-bg" class="confirm-bg" onclick="if(event.target===this) ui.closeConfirm()">
@@ -1935,7 +1966,11 @@
     basemap: 'hybrid',  // default: satellite + labels/roads (previous satellite behaviour)
     drawDefaults: {
       groupId: null,
-      style: { stroke: '#3aa0ff', strokeWidth: 2.5, fill: '#3aa0ff', fillOpacity: 0.30, visible: true, showLabel: true },
+      style: {
+        stroke: '#3aa0ff', strokeWidth: 2.5, fill: '#3aa0ff', fillOpacity: 0.30,
+        visible: true, showLabel: true, lineDash: 'solid',
+        labelSize: 12, labelColor: '#ffffff', labelFont: 'opensans',
+      },
     },
     listeners: { features: [], ui: [] },
   };
@@ -1978,7 +2013,7 @@
         if (parsed && typeof parsed === 'object') {
           if (parsed.groupId !== undefined) state.drawDefaults.groupId = parsed.groupId || null;
           if (parsed.style && typeof parsed.style === 'object') {
-            state.drawDefaults.style = { ...state.drawDefaults.style, ...parsed.style };
+            state.drawDefaults.style = normalizeStyle({ ...state.drawDefaults.style, ...parsed.style });
           }
         }
       }
@@ -2084,11 +2119,42 @@
   function onUi(fn) { state.listeners.ui.push(fn); }
 
   /* ═══ 4. FEATURE OPERATIONS ═════════════════════════════════════════════════ */
+  const LINE_DASH_PRESETS = {
+    solid: null,
+    dashed: [2, 2],
+    dotted: [0.5, 1.5],
+    dashdot: [2, 1.2, 0.5, 1.2],
+    longdash: [4, 2],
+  };
+  const LABEL_FONT_PRESETS = [
+    { id: 'opensans', stack: ['Open Sans Regular', 'Arial Unicode MS Regular'], labelKey: 'font_opensans' },
+    { id: 'opensans_bold', stack: ['Open Sans Bold', 'Arial Unicode MS Regular'], labelKey: 'font_opensans_bold' },
+    { id: 'opensans_italic', stack: ['Open Sans Italic', 'Arial Unicode MS Regular'], labelKey: 'font_opensans_italic' },
+    { id: 'opensans_semibold', stack: ['Open Sans Semibold', 'Arial Unicode MS Regular'], labelKey: 'font_opensans_semibold' },
+    { id: 'arial', stack: ['Arial Unicode MS Regular', 'Open Sans Regular'], labelKey: 'font_arial' },
+  ];
   const DEFAULT_STYLE = {
     stroke: '#3aa0ff', strokeWidth: 2.5,
     fill: '#3aa0ff', fillOpacity: 0.30,
     visible: true, showLabel: true,
+    lineDash: 'solid',
+    labelSize: 12,
+    labelColor: '#ffffff',
+    labelFont: 'opensans',
   };
+  function normalizeStyle(st) {
+    const s = { ...DEFAULT_STYLE, ...(st || {}) };
+    if (!LINE_DASH_PRESETS.hasOwnProperty(s.lineDash)) s.lineDash = 'solid';
+    if (!LABEL_FONT_PRESETS.some(f => f.id === s.labelFont)) s.labelFont = 'opensans';
+    const sz = Number(s.labelSize);
+    s.labelSize = isFinite(sz) ? Math.max(8, Math.min(28, sz)) : 12;
+    if (typeof s.labelColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.labelColor)) s.labelColor = '#ffffff';
+    return s;
+  }
+  function labelFontStack(id) {
+    const hit = LABEL_FONT_PRESETS.find(f => f.id === id);
+    return (hit && hit.stack) || LABEL_FONT_PRESETS[0].stack;
+  }
 
   function normalizeLoadedFeatures(items) {
     if (!Array.isArray(items)) return [];
@@ -2096,7 +2162,7 @@
     return items.map((f) => {
       if (!f || !f.geojson || !f.geojson.geometry) return null;
       const kind = f.kind || kindFromGeom(f.geojson.geometry, f.geojson && f.geojson.properties && f.geojson.properties.mode);
-      const style = { ...DEFAULT_STYLE, ...(f.style || {}) };
+      const style = normalizeStyle(f.style || {});
       if (typeof style.showLabel !== 'boolean') style.showLabel = true;
       if (typeof style.visible !== 'boolean') style.visible = true;
       const name = (typeof f.name === 'string' && f.name.trim()) ? f.name : null;
@@ -2640,17 +2706,17 @@
   function promptFeatureName(id) {
     const f = state.features.find(x => x.id === id);
     if (!f) return;
-    const kindLabel = ({
-      point: 'point',
-      line: 'ligne',
-      polygon: 'polygone',
-      rectangle: 'rectangle',
-      circle: 'cercle',
-      freehand: 'forme libre',
-    })[f.kind] || 'objet';
+    const kindKey = ({
+      point: 'name_kind_point',
+      line: 'name_kind_line',
+      polygon: 'name_kind_polygon',
+      rectangle: 'name_kind_rectangle',
+      circle: 'name_kind_circle',
+      freehand: 'name_kind_freehand',
+    })[f.kind] || 'name_kind_object';
     ui.prompt(
-      `Nommer le ${kindLabel}`,
-      `Choisissez un nom ou validez avec « ${f.name} ».`,
+      `${t('name_title')} ${t(kindKey)}`,
+      `${t('name_keep_default')} « ${f.name} ».`,
       f.name,
       (newName) => {
         if (newName && newName !== f.name) renameFeature(id, newName);
@@ -2729,6 +2795,10 @@
       fill: pick('fill'),
       fillOpacity: pick('fillOpacity'),
       showLabel: pick('showLabel'),
+      lineDash: pick('lineDash'),
+      labelSize: pick('labelSize'),
+      labelColor: pick('labelColor'),
+      labelFont: pick('labelFont'),
     };
   }
 
@@ -2756,7 +2826,7 @@
     if (!f || !state.drawDefaults) return;
     if (state.drawDefaults.groupId) f.groupId = state.drawDefaults.groupId;
     if (state.drawDefaults.style) {
-      f.style = { ...f.style, ...state.drawDefaults.style };
+      f.style = normalizeStyle({ ...f.style, ...state.drawDefaults.style });
     }
   }
 
@@ -2767,7 +2837,7 @@
     ids.forEach(id => {
       const f = state.features.find(x => x.id === id);
       if (f) {
-        f.style = { ...f.style, ...patch };
+        f.style = normalizeStyle({ ...f.style, ...patch });
         f.updatedAt = Date.now();
         touched = true;
       }
@@ -2776,8 +2846,32 @@
     saveState();
     try { if (typeof refreshTerraDrawStylesHook === 'function') refreshTerraDrawStylesHook(); } catch (_) {}
     try { if (typeof syncDerivedLayer === 'function') syncDerivedLayer(); } catch (_) {}
+    try { if (typeof syncStyledLineOverlay === 'function') syncStyledLineOverlay(); } catch (_) {}
     try { if (typeof syncFeaturesToMap === 'function') syncFeaturesToMap(); } catch (_) {}
     try { map.triggerRepaint(); } catch (_) {}
+  }
+
+  function lineDashOptionsHtml(selected) {
+    const opts = [
+      ['solid', 'line_solid'],
+      ['dashed', 'line_dashed'],
+      ['dotted', 'line_dotted'],
+      ['dashdot', 'line_dashdot'],
+      ['longdash', 'line_longdash'],
+    ];
+    return opts.map(([id, key]) =>
+      `<option value="${id}"${selected === id ? ' selected' : ''}>${t(key)}</option>`
+    ).join('');
+  }
+  function labelFontOptionsHtml(selected) {
+    return LABEL_FONT_PRESETS.map(f =>
+      `<option value="${f.id}"${selected === f.id ? ' selected' : ''}>${t(f.labelKey)}</option>`
+    ).join('');
+  }
+  function formatPropDate(ts) {
+    if (!ts) return '—';
+    try { return new Date(ts).toLocaleString(I18N.getLang() === 'fr' ? 'fr-FR' : 'en-GB'); }
+    catch (_) { return String(ts); }
   }
 
   function toggleSelect(id) {
@@ -3198,27 +3292,21 @@
       id: 'app-label', type: 'symbol', source: SRC_LABELS,
       layout: {
         'text-field': ['get', 'name'],
-        // Use a map glyph stack that is actually available across basemaps.
-        'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
-        'text-size': 12,
-        // Minimal offset: label sits very close to the geometry centroid.
+        'text-font': ['get', 'textFont'],
+        'text-size': ['coalesce', ['get', 'labelSize'], 12],
         'text-offset': [0, 0.6],
         'text-anchor': 'top',
-        // User-set orientation, kept in map space so a label stays aligned
-        // with the ground (and with its object) when the map is rotated.
         'text-rotate': ['coalesce', ['get', 'rotation'], 0],
         'text-rotation-alignment': 'map',
         'text-pitch-alignment': 'viewport',
-        // Separated anchor positions are computed in code; always show our labels.
         'text-allow-overlap': true,
         'text-ignore-placement': true,
         'text-optional': false,
         'text-padding': 2,
-        // Higher priority value = drawn later = on top when placement allows.
         'symbol-sort-key': ['coalesce', ['get', 'priority'], 0],
       },
       paint: {
-        'text-color': '#ffffff',
+        'text-color': ['coalesce', ['get', 'labelColor'], '#ffffff'],
         'text-halo-color': '#0b0f14',
         'text-halo-width': 2,
         'text-halo-blur': 0.5,
@@ -3461,6 +3549,9 @@
         rotation: labelRotationOf(f),
         manual: !!(f.labelOffset && f.labelOffset.distM > 0.5),
         name: (f.name && String(f.name).trim()) ? f.name : nameForKind(f.kind),
+        labelSize: (f.style && f.style.labelSize) || 12,
+        labelColor: (f.style && f.style.labelColor) || '#ffffff',
+        labelFont: (f.style && f.style.labelFont) || 'opensans',
       });
     }
     separateLabelAnchors(candidates, 55);
@@ -3468,7 +3559,11 @@
       type: 'Feature',
       id: c.id,
       geometry: { type: 'Point', coordinates: c.anchor },
-      properties: { id: c.id, name: c.name, priority: c.priority, rotation: c.rotation },
+      properties: {
+        id: c.id, name: c.name, priority: c.priority, rotation: c.rotation,
+        labelSize: c.labelSize, labelColor: c.labelColor, labelFont: c.labelFont,
+        textFont: labelFontStack(c.labelFont),
+      },
     }));
   }
 
@@ -4029,14 +4124,14 @@
           try { if (navigator.vibrate) navigator.vibrate(30); } catch (_) {}
           if (pending.kind === 'edge') {
             ui.confirm(
-              'Ajouter un sommet ?',
-              'Un nouveau sommet sera inséré sur le segment à cet endroit.',
+              t('vtx_add_title'),
+              t('vtx_add_msg'),
               () => { insertFeatureVertex(pending); }
             );
           } else {
             ui.confirm(
-              'Supprimer ce sommet ?',
-              'Ce point sera retiré de l\'objet. Continuer ?',
+              t('vtx_del_title'),
+              t('vtx_del_msg'),
               () => { deleteFeatureVertex(pending); }
             );
           }
@@ -4665,8 +4760,8 @@
             const toggle = document.createElement('button');
             toggle.id = 'draw-toggle-btn';
             toggle.type = 'button';
-            toggle.title = 'Outils de dessin';
-            toggle.setAttribute('aria-label', 'Afficher/masquer les outils de dessin');
+            toggle.title = t('draw_tools_toggle');
+            toggle.setAttribute('aria-label', t('draw_tools_toggle_aria'));
             toggle.innerHTML = `
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
                    fill="none" stroke="currentColor" stroke-width="2.2"
@@ -4810,6 +4905,13 @@
             'add-rectangle': `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto;"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>`,
             'add-circle': `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto;"><circle cx="12" cy="12" r="8"/></svg>`,
           };
+          const drawTitleKeys = {
+            'add-point': 'draw_point',
+            'add-line': 'draw_line',
+            'add-polygon': 'draw_polygon',
+            'add-rectangle': 'draw_rectangle',
+            'add-circle': 'draw_circle',
+          };
           const beautifyDraw = () => {
             ctrlGroup.querySelectorAll('button').forEach(btn => {
               const cls = btn.className || '';
@@ -4818,6 +4920,10 @@
                 if (cls.indexOf(key) !== -1) {
                   btn.classList.add('hgis-sharp-btn');
                   btn.innerHTML = drawIcons[key];
+                  if (drawTitleKeys[key]) {
+                    btn.title = t(drawTitleKeys[key]);
+                    btn.setAttribute('aria-label', t(drawTitleKeys[key]));
+                  }
                   break;
                 }
               }
@@ -4842,8 +4948,8 @@
           const selectBtn = document.createElement('button');
           selectBtn.id = 'hgis-select-btn';
           selectBtn.type = 'button';
-          selectBtn.title = 'Sélectionner';
-          selectBtn.setAttribute('aria-label', 'Activer la sélection');
+          selectBtn.title = t('draw_select');
+          selectBtn.setAttribute('aria-label', t('draw_select_aria'));
           selectBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn';
           selectBtn.style.cssText = 'background-image:none; background-color:transparent;';
           selectBtn.innerHTML = selectSvg;
@@ -4856,8 +4962,8 @@
           const editBtn = document.createElement('button');
           editBtn.id = 'hgis-edit-btn';
           editBtn.type = 'button';
-          editBtn.title = 'Éditer : glisser sommets · appui long sur sommet = supprimer · appui long sur segment = ajouter';
-          editBtn.setAttribute('aria-label', 'Éditer la sélection');
+          editBtn.title = t('draw_edit');
+          editBtn.setAttribute('aria-label', t('draw_edit_aria'));
           editBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
           editBtn.style.cssText = 'background-image:none; background-color:transparent;';
           editBtn.innerHTML = editSvg;
@@ -4875,8 +4981,7 @@
                 return;
               }
               if (state.selectedIds.length === 0) {
-                ui.confirm('Aucune sélection',
-                  "Sélectionnez d'abord un objet (tap directement dessus), puis touchez Éditer.", () => {});
+                ui.confirm(t('no_selection'), t('edit_need_select'), () => {});
                 return;
               }
               const firstId = state.selectedIds[0];
@@ -4902,20 +5007,20 @@
           const delBtn = document.createElement('button');
           delBtn.id = 'hgis-del-btn';
           delBtn.type = 'button';
-          delBtn.title = 'Supprimer la sélection';
-          delBtn.setAttribute('aria-label', 'Supprimer la sélection');
+          delBtn.title = t('draw_delete');
+          delBtn.setAttribute('aria-label', t('draw_delete'));
           delBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn hgis-child-danger';
           delBtn.style.cssText = 'background-image:none; background-color:transparent;';
           delBtn.innerHTML = delSvg;
           delBtn.onclick = (ev) => {
             if (ev) { ev.preventDefault(); ev.stopPropagation(); }
             if (!state.selectedIds.length) {
-              ui.confirm('Aucune sélection', "Sélectionnez d'abord un objet à supprimer.", () => {});
+              ui.confirm(t('no_selection'), t('delete_need_select'), () => {});
               return;
             }
             const toDelete = state.selectedIds.slice();
-            ui.confirm('Supprimer ?',
-              `Supprimer définitivement ${toDelete.length} objet${toDelete.length > 1 ? 's' : ''} sélectionné${toDelete.length > 1 ? 's' : ''} ?`,
+            ui.confirm(t('delete_confirm_title'),
+              t('delete_confirm_msg') + ` (${toDelete.length})`,
               () => {
                 toDelete.forEach(removeFeature);
                 state.selectedIds = [];
@@ -4933,8 +5038,8 @@
           const multiBtn = document.createElement('button');
           multiBtn.id = 'hgis-multi-btn';
           multiBtn.type = 'button';
-          multiBtn.title = 'Sélection multiple';
-          multiBtn.setAttribute('aria-label', 'Activer la sélection multiple');
+          multiBtn.title = t('draw_multi');
+          multiBtn.setAttribute('aria-label', t('draw_multi'));
           multiBtn.className = 'maplibregl-terradraw-add-control hgis-custom-btn hgis-child-btn';
           multiBtn.style.cssText = 'background-image:none; background-color:transparent;';
           multiBtn.innerHTML = multiSvg;
@@ -5027,7 +5132,8 @@
         const lineStyles = {
           lineStringColor: (feature) => {
             const ours = ourFeatureForTerraId(feature.id);
-            return ours ? ours.style.stroke : '#3f97e0';
+            if (!ours) return '#3f97e0';
+            return featureIsDashed(ours) ? 'rgba(0,0,0,0)' : ours.style.stroke;
           },
           lineStringWidth: (feature) => {
             const ours = ourFeatureForTerraId(feature.id);
@@ -5036,7 +5142,11 @@
         };
         const polyStyles = {
           fillColor:    (feature) => { const o = ourFeatureForTerraId(feature.id); return o ? o.style.fill   : '#3f97e0'; },
-          outlineColor: (feature) => { const o = ourFeatureForTerraId(feature.id); return o ? o.style.stroke : '#3f97e0'; },
+          outlineColor: (feature) => {
+            const o = ourFeatureForTerraId(feature.id);
+            if (!o) return '#3f97e0';
+            return featureIsDashed(o) ? 'rgba(0,0,0,0)' : o.style.stroke;
+          },
           outlineWidth: (feature) => { const o = ourFeatureForTerraId(feature.id); return o ? o.style.strokeWidth : 4; },
           fillOpacity:  (feature) => { const o = ourFeatureForTerraId(feature.id); return o ? o.style.fillOpacity : 0.3; },
         };
@@ -6251,18 +6361,12 @@
 
       // Render mobile sheet
       if (state.activePanel && (mobile || state.activePanel === 'menu')) {
-        const isMenu = state.activePanel === 'menu';
-        const title = isMenu ? t('app_name') : panelTitle(state.activePanel);
+        const title = panelTitle(state.activePanel);
         document.getElementById('sheet-title').textContent = title;
         const sub = document.getElementById('sheet-subtitle');
         if (sub) {
-          if (isMenu) {
-            sub.textContent = t('author_by');
-            sub.classList.add('visible');
-          } else {
-            sub.textContent = '';
-            sub.classList.remove('visible');
-          }
+          sub.textContent = '';
+          sub.classList.remove('visible');
         }
         if (!skipSheetBody) renderPanel('sheet-body', state.activePanel);
         if (mobile) {
@@ -6666,24 +6770,57 @@
     const opacity = document.getElementById('dd-opacity');
     const opacityVal = document.getElementById('dd-opacity-val');
     const labelCb = document.getElementById('dd-label');
+    const lineDash = document.getElementById('dd-linedash');
+    const labelSize = document.getElementById('dd-labelsize');
+    const labelSizeVal = document.getElementById('dd-labelsize-val');
+    const labelColor = document.getElementById('dd-labelcolor');
+    const labelColorHex = document.getElementById('dd-labelcolor-hex');
+    const labelFont = document.getElementById('dd-labelfont');
     if (!wrap || !toggle) return;
 
     mountDrawDefaultsInToolbar();
     setTimeout(mountDrawDefaultsInToolbar, 500);
     setTimeout(mountDrawDefaultsInToolbar, 1500);
 
+    const refreshDrawDefaultsLabels = () => {
+      const setTxt = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+      setTxt('dd-lbl-group', 'target_layer');
+      setTxt('dd-lbl-stroke', 'stroke');
+      setTxt('dd-lbl-width', 'width');
+      setTxt('dd-lbl-linedash', 'line_style');
+      setTxt('dd-lbl-fill', 'fill');
+      setTxt('dd-lbl-opacity', 'opacity');
+      setTxt('dd-lbl-hide', 'hide_label');
+      setTxt('dd-lbl-labelsize', 'label_size');
+      setTxt('dd-lbl-labelcolor', 'label_color');
+      setTxt('dd-lbl-labelfont', 'label_font');
+      setTxt('dd-hint', 'draw_defaults_hint');
+      if (newGroupBtn) newGroupBtn.textContent = t('new_layer');
+      if (lineDash) {
+        const cur = lineDash.value || 'solid';
+        lineDash.innerHTML = lineDashOptionsHtml(cur);
+      }
+      if (labelFont) {
+        const cur = labelFont.value || (state.drawDefaults.style.labelFont || 'opensans');
+        labelFont.innerHTML = labelFontOptionsHtml(cur);
+      }
+    };
+    window.refreshDrawDefaultsLabels = refreshDrawDefaultsLabels;
+
     const refreshGroupOpts = () => {
       if (!groupSel) return;
       const cur = state.drawDefaults.groupId || '';
-      groupSel.innerHTML = `<option value="">Sans couche</option>` +
+      groupSel.innerHTML = `<option value="">${t('sans_couche')}</option>` +
         state.groups.map(g =>
           `<option value="${g.id}" ${cur === g.id ? 'selected' : ''}>${escapeHtml(g.name)}</option>`
         ).join('');
     };
 
     const syncFromState = () => {
+      refreshDrawDefaultsLabels();
       refreshGroupOpts();
-      const st = state.drawDefaults.style;
+      const st = normalizeStyle(state.drawDefaults.style);
+      state.drawDefaults.style = st;
       if (stroke) stroke.value = st.stroke || '#3aa0ff';
       if (strokeHex) strokeHex.value = st.stroke || '#3aa0ff';
       if (width) width.value = String(st.strokeWidth ?? 2.5);
@@ -6693,6 +6830,12 @@
       if (opacity) opacity.value = String(st.fillOpacity ?? 0.3);
       if (opacityVal) opacityVal.textContent = Math.round((st.fillOpacity ?? 0.3) * 100) + '%';
       if (labelCb) labelCb.checked = st.showLabel === false;
+      if (lineDash) lineDash.value = st.lineDash || 'solid';
+      if (labelSize) labelSize.value = String(st.labelSize ?? 12);
+      if (labelSizeVal) labelSizeVal.textContent = String(st.labelSize ?? 12);
+      if (labelColor) labelColor.value = st.labelColor || '#ffffff';
+      if (labelColorHex) labelColorHex.value = st.labelColor || '#ffffff';
+      if (labelFont) labelFont.value = st.labelFont || 'opensans';
     };
 
     const saveDrawDefaults = () => { saveState(); };
@@ -6701,7 +6844,6 @@
       e.stopPropagation();
       wrap.classList.toggle('open');
       toggle.classList.toggle('active', wrap.classList.contains('open'));
-      // Close app-options if open (only one popover at a time).
       try {
         const opt = document.getElementById('app-options');
         if (opt) opt.classList.remove('open');
@@ -6715,7 +6857,7 @@
     });
 
     newGroupBtn?.addEventListener('click', () => {
-      ui.prompt('Nouvelle couche', 'Nom de la couche :', 'Couche ' + (state.groups.length + 1), (name) => {
+      ui.prompt(t('new_layer_title'), t('new_layer_prompt'), t('layer_name_default') + ' ' + (state.groups.length + 1), (name) => {
         if (name && name.trim()) {
           const g = createGroup(name.trim());
           state.drawDefaults.groupId = g.id;
@@ -6766,6 +6908,32 @@
       state.drawDefaults.style.showLabel = !labelCb.checked;
       saveDrawDefaults();
     });
+    lineDash?.addEventListener('change', () => {
+      state.drawDefaults.style.lineDash = lineDash.value;
+      saveDrawDefaults();
+    });
+    labelSize?.addEventListener('input', () => {
+      const v = parseInt(labelSize.value, 10);
+      state.drawDefaults.style.labelSize = v;
+      if (labelSizeVal) labelSizeVal.textContent = String(v);
+      saveDrawDefaults();
+    });
+    labelColor?.addEventListener('input', () => {
+      state.drawDefaults.style.labelColor = labelColor.value;
+      if (labelColorHex) labelColorHex.value = labelColor.value;
+      saveDrawDefaults();
+    });
+    labelColorHex?.addEventListener('change', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(labelColorHex.value)) {
+        state.drawDefaults.style.labelColor = labelColorHex.value;
+        if (labelColor) labelColor.value = labelColorHex.value;
+        saveDrawDefaults();
+      }
+    });
+    labelFont?.addEventListener('change', () => {
+      state.drawDefaults.style.labelFont = labelFont.value;
+      saveDrawDefaults();
+    });
 
     document.addEventListener('click', (e) => {
       if (!wrap.contains(e.target)) {
@@ -6783,17 +6951,17 @@
     const targets = describeStyleTargets();
     const sel = getSelectedFeaturesForStyle();
     if (sel.length === 0) {
-      return `<div class="empty-state">Sélectionnez un ou plusieurs objets ou couches dans « Calques », ou sur la carte, pour modifier leur style.</div>`;
+      return `<div class="empty-state">${t('style_select')}</div>`;
     }
     const sum = summarizeStyles(sel);
     const mixedNote = Object.values(sum).some(v => v === undefined)
-      ? `<div style="font-size:11px; color:var(--warn); margin-bottom:10px;">Valeurs mixtes — toute modification unifiera les ${sel.length} objets sélectionnés.</div>`
+      ? `<div style="font-size:11px; color:var(--warn); margin-bottom:10px;">${t('style_mixed')} (${sel.length})</div>`
       : '';
-    const header = targets.label.includes('couche')
-      ? `Modification de <strong style="color:var(--brand)">${escapeHtml(targets.label)}</strong> (${sel.length} objet${sel.length > 1 ? 's' : ''})`
+    const header = targets.label.includes('couche') || targets.label.toLowerCase().includes('layer')
+      ? `Modification de <strong style="color:var(--brand)">${escapeHtml(targets.label)}</strong> (${sel.length})`
       : sel.length === 1
         ? `Modification de <strong style="color:var(--brand)">${escapeHtml(sel[0].name)}</strong>`
-        : `Modification de <strong style="color:var(--brand)">${sel.length} objets</strong> sélectionnés`;
+        : `Modification de <strong style="color:var(--brand)">${sel.length}</strong>`;
     const strokeVal = sum.stroke !== undefined ? sum.stroke : (sel[0].style.stroke || '#3aa0ff');
     const strokeHexVal = sum.stroke !== undefined ? sum.stroke : '';
     const strokeHexPh = sum.stroke === undefined ? '—' : '';
@@ -6806,33 +6974,43 @@
     const opacityDisp = sum.fillOpacity !== undefined ? Math.round(sum.fillOpacity * 100) + '%' : '—';
     const labelChecked = sum.showLabel === false ? 'checked' : '';
     const labelIndet = sum.showLabel === undefined ? ' data-indeterminate="1"' : '';
+    const dashVal = sum.lineDash !== undefined ? sum.lineDash : (sel[0].style.lineDash || 'solid');
+    const labelSizeVal = sum.labelSize !== undefined ? sum.labelSize : (sel[0].style.labelSize || 12);
+    const labelSizeDisp = sum.labelSize !== undefined ? String(sum.labelSize) : '—';
+    const labelColorVal = sum.labelColor !== undefined ? sum.labelColor : (sel[0].style.labelColor || '#ffffff');
+    const labelColorHex = sum.labelColor !== undefined ? sum.labelColor : '';
+    const labelFontVal = sum.labelFont !== undefined ? sum.labelFont : (sel[0].style.labelFont || 'opensans');
     return `
       <div style="font-size:13px; color:var(--ink-1); margin-bottom:14px; padding:8px 10px; background:var(--bg-3); border-radius:6px;">${header}</div>
       ${mixedNote}
       <div class="stack">
         <div>
-          <label class="field-label">Contour</label>
+          <label class="field-label">${t('stroke')}</label>
           <div class="color-row">
             <input type="color" id="st-stroke" value="${strokeVal}" />
             <input type="text" id="st-stroke-hex" class="field" value="${strokeHexVal}" placeholder="${strokeHexPh}" />
           </div>
         </div>
         <div>
-          <label class="field-label">Épaisseur</label>
+          <label class="field-label">${t('width')}</label>
           <div class="slider-row">
             <input type="range" id="st-width" min="0.5" max="10" step="0.5" value="${widthVal}" />
             <span class="val" id="st-width-val">${widthDisp}</span>
           </div>
         </div>
         <div>
-          <label class="field-label">Remplissage</label>
+          <label class="field-label">${t('line_style')}</label>
+          <select id="st-linedash" class="field">${lineDashOptionsHtml(dashVal)}</select>
+        </div>
+        <div>
+          <label class="field-label">${t('fill')}</label>
           <div class="color-row">
             <input type="color" id="st-fill" value="${fillVal}" />
             <input type="text" id="st-fill-hex" class="field" value="${fillHexVal}" placeholder="${fillHexPh}" />
           </div>
         </div>
         <div>
-          <label class="field-label">Opacité</label>
+          <label class="field-label">${t('opacity')}</label>
           <div class="slider-row">
             <input type="range" id="st-opacity" min="0" max="1" step="0.05" value="${opacityVal}" />
             <span class="val" id="st-opacity-val">${opacityDisp}</span>
@@ -6841,10 +7019,28 @@
         <div>
           <label class="checkbox-row">
             <input type="checkbox" id="st-label" ${labelChecked}${labelIndet} />
-            <span>Masquer l'étiquette</span>
+            <span>${t('hide_label')}</span>
           </label>
         </div>
-        <button type="button" class="btn btn-solid" id="st-apply" style="width:100%;">Appliquer</button>
+        <div>
+          <label class="field-label">${t('label_size')}</label>
+          <div class="slider-row">
+            <input type="range" id="st-labelsize" min="8" max="28" step="1" value="${labelSizeVal}" />
+            <span class="val" id="st-labelsize-val">${labelSizeDisp}</span>
+          </div>
+        </div>
+        <div>
+          <label class="field-label">${t('label_color')}</label>
+          <div class="color-row">
+            <input type="color" id="st-labelcolor" value="${labelColorVal}" />
+            <input type="text" id="st-labelcolor-hex" class="field" value="${labelColorHex}" />
+          </div>
+        </div>
+        <div>
+          <label class="field-label">${t('label_font')}</label>
+          <select id="st-labelfont" class="field">${labelFontOptionsHtml(labelFontVal)}</select>
+        </div>
+        <button type="button" class="btn btn-solid" id="st-apply" style="width:100%;">${t('btn_apply')}</button>
       </div>`;
   }
 
@@ -6890,6 +7086,28 @@
       if (labelCb) labelCb.indeterminate = false;
       apply({ showLabel: !e.target.checked });
     });
+    root.querySelector('#st-linedash')?.addEventListener('change', e => {
+      apply({ lineDash: e.target.value });
+    });
+    root.querySelector('#st-labelsize')?.addEventListener('input', e => {
+      const v = parseInt(e.target.value, 10);
+      apply({ labelSize: v });
+      const el = root.querySelector('#st-labelsize-val');
+      if (el) el.textContent = String(v);
+    });
+    root.querySelector('#st-labelcolor')?.addEventListener('input', e => {
+      apply({ labelColor: e.target.value });
+      const hex = root.querySelector('#st-labelcolor-hex'); if (hex) hex.value = e.target.value;
+    });
+    root.querySelector('#st-labelcolor-hex')?.addEventListener('change', e => {
+      if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
+        apply({ labelColor: e.target.value });
+        const c = root.querySelector('#st-labelcolor'); if (c) c.value = e.target.value;
+      }
+    });
+    root.querySelector('#st-labelfont')?.addEventListener('change', e => {
+      apply({ labelFont: e.target.value });
+    });
     root.querySelector('#st-apply')?.addEventListener('click', () => {
       try { map.triggerRepaint(); } catch (_) {}
     });
@@ -6925,32 +7143,64 @@
   function renderMeasure() {
     const sel = getSelectedFeaturesForStyle();
     if (sel.length === 0) {
-      return `<div class="empty-state">Sélectionnez un objet dans « Calques » pour voir ses propriétés.</div>`;
+      return `<div class="empty-state">${t('prop_select')}</div>`;
     }
-    let totalLen = 0, totalArea = 0;
+    let totalLen = 0, totalArea = 0, totalPerim = 0;
     const items = sel.map(f => {
-      if (f.metrics.lengthMeters) totalLen += f.metrics.lengthMeters;
-      if (f.metrics.areaSquareMeters) totalArea += f.metrics.areaSquareMeters;
+      const props = (typeof AtlasFormats !== 'undefined' && AtlasFormats.exportProps)
+        ? AtlasFormats.exportProps(f, state.groups)
+        : {
+            id: f.id, name: f.name, kind: f.kind,
+            groupName: (state.groups.find(g => g.id === f.groupId) || {}).name || '',
+            style: f.style || {}, metrics: f.metrics || {},
+            lengthMeters: f.metrics && f.metrics.lengthMeters,
+            areaSquareMeters: f.metrics && f.metrics.areaSquareMeters,
+            perimeterMeters: f.metrics && f.metrics.areaSquareMeters !== undefined ? f.metrics.lengthMeters : undefined,
+            createdAt: f.createdAt, updatedAt: f.updatedAt,
+          };
+      if (props.lengthMeters) totalLen += props.lengthMeters;
+      if (props.areaSquareMeters) totalArea += props.areaSquareMeters;
+      if (props.perimeterMeters) totalPerim += props.perimeterMeters;
+      const st = normalizeStyle(props.style || {});
+      const dashLabel = ({
+        solid: t('line_solid'), dashed: t('line_dashed'), dotted: t('line_dotted'),
+        dashdot: t('line_dashdot'), longdash: t('line_longdash'),
+      })[st.lineDash] || st.lineDash;
+      const fontLabel = (LABEL_FONT_PRESETS.find(x => x.id === st.labelFont) || {}).labelKey;
       const coordsBlock = f.kind === 'point' ? renderPointPropertiesHtml(f) : '';
+      const row = (label, value) =>
+        `<div><span style="color:var(--ink-2)">${label} :</span> ${value}</div>`;
       return `
         <div class="surface" style="margin-bottom:8px;">
-          <div style="font-weight:500; margin-bottom:6px;">${escapeHtml(f.name)}</div>
-          <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1);">
-            ${f.metrics.lengthMeters !== undefined ? `<div><span style="color:var(--ink-2)">Longueur :</span> ${formatDistance(f.metrics.lengthMeters)}</div>` : ''}
-            ${f.metrics.areaSquareMeters !== undefined ? `<div><span style="color:var(--ink-2)">Surface  :</span> ${formatArea(f.metrics.areaSquareMeters)}</div>` : ''}
-            ${f.kind === 'point' && !f.metrics.lengthMeters && !f.metrics.areaSquareMeters ? `<div><span style="color:var(--ink-2)">Type :</span> Point</div>` : ''}
+          <div style="font-weight:500; margin-bottom:6px;">${escapeHtml(props.name || f.name)}</div>
+          <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:var(--ink-1); line-height:1.55;">
+            ${row(t('prop_id'), escapeHtml(String(props.id || '')))}
+            ${row(t('prop_kind'), escapeHtml(String(props.kind || '')))}
+            ${row(t('prop_group'), escapeHtml(props.groupName || t('sans_couche')))}
+            ${props.lengthMeters !== undefined && props.areaSquareMeters === undefined
+              ? row(t('prop_length'), formatDistance(props.lengthMeters)) : ''}
+            ${props.areaSquareMeters !== undefined
+              ? row(t('prop_area'), formatArea(props.areaSquareMeters)) : ''}
+            ${props.perimeterMeters !== undefined
+              ? row(t('prop_perimeter'), formatDistance(props.perimeterMeters)) : ''}
+            ${row(t('stroke'), `<span style="display:inline-block;width:10px;height:10px;background:${escapeHtml(st.stroke)};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>${escapeHtml(st.stroke)} · ${st.strokeWidth}px · ${escapeHtml(dashLabel)}`)}
+            ${row(t('fill'), `<span style="display:inline-block;width:10px;height:10px;background:${escapeHtml(st.fill)};opacity:${st.fillOpacity};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>${escapeHtml(st.fill)} (${Math.round(st.fillOpacity * 100)}%)`)}
+            ${row(t('label_style'), `${st.showLabel === false ? t('hide_label') : (st.labelSize + 'px · ' + escapeHtml(st.labelColor) + ' · ' + (fontLabel ? t(fontLabel) : st.labelFont))}`)}
+            ${row(t('prop_created'), escapeHtml(formatPropDate(props.createdAt)))}
+            ${row(t('prop_updated'), escapeHtml(formatPropDate(props.updatedAt)))}
           </div>
           ${coordsBlock}
         </div>`;
     }).join('');
     let total = '';
-    if (sel.length > 1 && (totalLen > 0 || totalArea > 0)) {
+    if (sel.length > 1 && (totalLen > 0 || totalArea > 0 || totalPerim > 0)) {
       total = `
         <div class="surface" style="background:rgba(58,160,255,0.05); border-color:rgba(58,160,255,0.3); margin-top:12px;">
           <div class="field-label" style="margin-bottom:4px;">Total</div>
           <div style="font-family:'JetBrains Mono',ui-monospace,monospace; font-size:13px;">
-            ${totalLen > 0 ? `<div><span style="color:var(--ink-2)">Longueur :</span> ${formatDistance(totalLen)}</div>` : ''}
-            ${totalArea > 0 ? `<div><span style="color:var(--ink-2)">Surface  :</span> ${formatArea(totalArea)}</div>` : ''}
+            ${totalLen > 0 && totalArea === 0 ? `<div><span style="color:var(--ink-2)">${t('prop_length')} :</span> ${formatDistance(totalLen)}</div>` : ''}
+            ${totalArea > 0 ? `<div><span style="color:var(--ink-2)">${t('prop_area')} :</span> ${formatArea(totalArea)}</div>` : ''}
+            ${totalPerim > 0 ? `<div><span style="color:var(--ink-2)">${t('prop_perimeter')} :</span> ${formatDistance(totalPerim)}</div>` : ''}
           </div>
         </div>`;
     }
@@ -8211,6 +8461,86 @@
       log.warn('[HydraulicGIS] ensureDerivedLayers failed:', e);
     }
   }
+  function featureLineDash(f) {
+    if (f && f.geojson && f.geojson.properties && f.geojson.properties._routeDash) return 'dashed';
+    const d = f && f.style && f.style.lineDash;
+    return (d && LINE_DASH_PRESETS.hasOwnProperty(d)) ? d : 'solid';
+  }
+  function featureIsDashed(f) {
+    return featureLineDash(f) !== 'solid';
+  }
+
+  function ensureStyledLineOverlay() {
+    if (!map.getSource('app-styled-lines')) {
+      map.addSource('app-styled-lines', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
+    const mkLine = (id, dashKind, dashArr) => {
+      if (map.getLayer(id)) return;
+      const paint = {
+        'line-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
+        'line-width': ['coalesce', ['get', 'strokeWidth'], 2.5],
+        'line-opacity': 1,
+      };
+      if (dashArr) paint['line-dasharray'] = dashArr;
+      map.addLayer({
+        id, type: 'line', source: 'app-styled-lines',
+        filter: ['all',
+          ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString']]],
+          ['==', ['get', 'dashKind'], dashKind],
+        ],
+        paint,
+      });
+    };
+    mkLine('app-styled-line-dashed', 'dashed', [2, 2]);
+    mkLine('app-styled-line-dotted', 'dotted', [0.5, 1.5]);
+    mkLine('app-styled-line-dashdot', 'dashdot', [2, 1.2, 0.5, 1.2]);
+    mkLine('app-styled-line-longdash', 'longdash', [4, 2]);
+    if (!map.getLayer('app-styled-poly-outline')) {
+      map.addLayer({
+        id: 'app-styled-poly-outline', type: 'line', source: 'app-styled-lines',
+        filter: ['all',
+          ['==', ['geometry-type'], 'Polygon'],
+          ['!=', ['get', 'dashKind'], 'solid'],
+        ],
+        paint: {
+          'line-color': ['coalesce', ['get', 'stroke'], '#3aa0ff'],
+          'line-width': ['coalesce', ['get', 'strokeWidth'], 2.5],
+          'line-dasharray': [2, 2],
+        },
+      });
+    }
+  }
+
+  function syncStyledLineOverlay() {
+    try {
+      ensureStyledLineOverlay();
+      const feats = [];
+      for (const f of state.features) {
+        if (!f || !f.geojson || !f.geojson.geometry || !isFeatureVisible(f)) continue;
+        if (isDerivedFeature(f) || f.kind === 'point') continue; // derived already handled
+        const dashKind = featureLineDash(f);
+        if (dashKind === 'solid') continue;
+        const g = f.geojson.geometry;
+        if (g.type === 'LineString' || g.type === 'MultiLineString' || g.type === 'Polygon' || g.type === 'MultiPolygon') {
+          feats.push({
+            type: 'Feature',
+            geometry: g,
+            properties: {
+              id: f.id,
+              stroke: f.style.stroke,
+              strokeWidth: f.style.strokeWidth,
+              dashKind,
+            },
+          });
+        }
+      }
+      const src = map.getSource('app-styled-lines');
+      if (src) src.setData({ type: 'FeatureCollection', features: feats });
+    } catch (e) {
+      log.warn('[HydraulicGIS] syncStyledLineOverlay failed:', e);
+    }
+  }
+
   // Push every feature in our store that has properties._derived === true
   // into the app-derived source. Called after addFeature for derived items.
   function syncDerivedLayer() {
@@ -8251,15 +8581,20 @@
               fill: f.style.fill,
               fillOpacity: f.style.fillOpacity,
               isNav: !!(f.geojson.properties && f.geojson.properties._navPoint),
-              dashed: !!(f.geojson.properties && f.geojson.properties._routeDash),
+              dashed: !!(f.geojson.properties && f.geojson.properties._routeDash)
+                || !!(f.style && f.style.lineDash && f.style.lineDash !== 'solid'),
+              dashKind: (f.style && f.style.lineDash) || (f.geojson.properties && f.geojson.properties._routeDash ? 'dashed' : 'solid'),
             },
           })),
         });
       }
+      try { syncStyledLineOverlay(); } catch (_) {}
       // Keep above td-* on every sync.
       for (const id of ['app-derived-fill', 'app-derived-outline', 'app-derived-line',
         'app-derived-line-dash', 'app-derived-point', 'app-contours-line',
-        'app-contour-labels-symbol', 'app-contour-labels-point']) {
+        'app-contour-labels-symbol', 'app-contour-labels-point',
+        'app-styled-line-solid', 'app-styled-line-dashed', 'app-styled-line-dotted',
+        'app-styled-line-dashdot', 'app-styled-line-longdash', 'app-styled-poly-outline']) {
         if (map.getLayer(id)) try { map.moveLayer(id); } catch (_) {}
       }
     } catch (e) {
@@ -8933,34 +9268,36 @@
     const totalCount = state.features.length;
     const noneVisible = visibleCount === 0;
     const exportHint = totalCount === 0
-      ? 'Aucun objet à exporter.'
+      ? t('files_none')
       : noneVisible
-        ? `${totalCount} objet(s) au total, mais tous masqués (œil fermé). Activez l'œil dans « Calques » pour les inclure.`
-        : `${visibleCount} sur ${totalCount} objet(s) seront exportés (ceux dont l'œil est actif dans « Calques »).`;
+        ? `${totalCount} ${t('files_hidden')}`
+        : `${visibleCount} ${t('files_of')} ${totalCount} ${t('files_will_export')}`;
     return `
       <div class="stack">
         <div>
-          <label class="field-label">Importer</label>
+          <label class="field-label">${t('files_import_btn')}</label>
           <p style="font-size:12px; color:var(--ink-1); margin:0 0 8px;">
-            Formats supportés : GeoJSON, JSON, CSV (colonnes latitude/longitude).
+            ${t('files_import_hint')}
           </p>
           <button class="btn btn-subtle" id="files-import" style="width:100%;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 4v12M6 10l6 6 6-6M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            Importer un fichier
+            ${t('files_import_btn')}
           </button>
           <div id="files-status" style="font-size:12px; margin-top:8px;"></div>
         </div>
 
         <div>
-          <label class="field-label">Exporter</label>
+          <label class="field-label">${t('files_export')}</label>
           <p style="font-size:12px; color:var(--ink-2); margin:0 0 8px;">${escapeHtml(exportHint)}</p>
           ${noneVisible
             ? ''
             : `<div class="export-grid">
-                <button class="export-btn" data-export="geojson">GeoJSON<span class="hint">Géométrie complète</span></button>
-                <button class="export-btn" data-export="kml">KML<span class="hint">Géométrie complète</span></button>
-                <button class="export-btn" data-export="csv">CSV<span class="hint">Tous les sommets</span></button>
-                <button class="export-btn" data-export="txt">TXT<span class="hint">Liste des sommets</span></button>
+                <button class="export-btn" data-export="geojson">${t('export_geojson')}<span class="hint">${t('export_hint_geom')}</span></button>
+                <button class="export-btn" data-export="kml">${t('export_kml')}<span class="hint">${t('export_hint_geom')}</span></button>
+                <button class="export-btn" data-export="csv">${t('export_csv')}<span class="hint">${t('export_hint_verts')}</span></button>
+                <button class="export-btn" data-export="txt">${t('export_txt')}<span class="hint">${t('export_hint_list')}</span></button>
+                <button class="export-btn" data-export="dxf">${t('export_dxf')}<span class="hint">${t('export_hint_cad')}</span></button>
+                <button class="export-btn" data-export="shp">${t('export_shp')}<span class="hint">${t('export_hint_shp')}</span></button>
               </div>`
           }
         </div>
@@ -9762,10 +10099,62 @@
 
   async function importFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'dwg') throw new Error(t('import_dwg_use_dxf'));
+    if (ext === 'zip' || ext === 'shp') {
+      if (!window.AtlasFormats) throw new Error(t('import_unsupported') + ' : .' + ext);
+      const buf = await file.arrayBuffer();
+      const fc = await AtlasFormats.parseShapefileZip(buf);
+      return featuresFromImportedFc(fc, file.name);
+    }
+    if (ext === 'dxf') {
+      if (!window.AtlasFormats) throw new Error(t('import_unsupported') + ' : .' + ext);
+      const text = await file.text();
+      const fc = AtlasFormats.parseDxf(text);
+      return featuresFromImportedFc(fc, file.name);
+    }
     const text = await file.text();
     if (ext === 'geojson' || ext === 'json') return parseGeoJSON(text);
     if (ext === 'csv') return parseCSV(text);
-    throw new Error(`Format non supporté : .${ext}`);
+    throw new Error(`${t('import_unsupported')} : .${ext}`);
+  }
+
+  function ensureGroupByName(name) {
+    const n = String(name || '').trim();
+    if (!n || n === '0') return null;
+    let g = state.groups.find(x => x.name === n);
+    if (!g) g = createGroupObj(n);
+    return g ? g.id : null;
+  }
+
+  function featuresFromImportedFc(fc, sourceName) {
+    const features = (fc && fc.features) || [];
+    const out = [];
+    for (const f of features) {
+      if (!f || !f.geometry) continue;
+      const props = f.properties || {};
+      const kind = props.kind || kindFromGeom(f.geometry);
+      const geo = { type: 'Feature', geometry: f.geometry, properties: {} };
+      const style = normalizeStyle({
+        ...DEFAULT_STYLE,
+        ...(typeof props.style === 'object' ? props.style : {}),
+        ...(props.STROKE || props.stroke ? { stroke: props.STROKE || props.stroke } : {}),
+        ...(props.FILL || props.fill ? { fill: props.FILL || props.fill } : {}),
+      });
+      const groupId = ensureGroupByName(props.groupName || props.LAYER || props.layer || props.Layer);
+      out.push({
+        id: props.id || newId('f'),
+        name: props.name || props.NAME || props.layer || `Import ${out.length + 1}`,
+        kind,
+        groupId,
+        geojson: geo,
+        style,
+        metrics: computeMetrics(geo, kind),
+        createdAt: props.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      });
+    }
+    if (!out.length && sourceName) throw new Error(t('import_unsupported') + ' (' + sourceName + ')');
+    return out;
   }
 
   function parseGeoJSON(text) {
@@ -9778,12 +10167,14 @@
       const props = f.properties || {};
       const kind = props.kind || kindFromGeom(f.geometry);
       const geo = { type: 'Feature', geometry: f.geometry, properties: {} };
+      const groupId = props.groupId || ensureGroupByName(props.groupName || props.layer);
       out.push({
         id: props.id || newId('f'),
         name: props.name || `Importé ${out.length + 1}`,
         kind,
+        groupId: groupId || null,
         geojson: geo,
-        style: { ...DEFAULT_STYLE, ...(props.style || {}) },
+        style: normalizeStyle({ ...DEFAULT_STYLE, ...(props.style || {}) }),
         metrics: computeMetrics(geo, kind),
         createdAt: props.createdAt || Date.now(),
         updatedAt: Date.now(),
@@ -9853,7 +10244,20 @@
       })),
     };
     if (format === 'geojson') {
-      saveAs(new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' }), 'projet.geojson');
+      const enriched = {
+        type: 'FeatureCollection',
+        features: features.map(f => {
+          const p = (window.AtlasFormats && AtlasFormats.exportProps)
+            ? AtlasFormats.exportProps(f, state.groups)
+            : {
+                id: f.id, name: f.name, kind: f.kind, groupId: f.groupId || null,
+                style: f.style, metrics: f.metrics,
+                createdAt: f.createdAt, updatedAt: f.updatedAt,
+              };
+          return { type: 'Feature', geometry: f.geojson.geometry, properties: p };
+        }),
+      };
+      saveAs(new Blob([JSON.stringify(enriched, null, 2)], { type: 'application/geo+json' }), 'projet.geojson');
     } else if (format === 'kml') {
       const kml = featuresToKML(fc);
       saveAs(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), 'projet.kml');
@@ -9884,9 +10288,13 @@
     } else if (format === 'txt') {
       const lines = [`Atlas GIS — Export ${new Date().toISOString()}`, `Objets : ${features.length}`, '─'.repeat(60)];
       for (const f of features) {
+        const p = (window.AtlasFormats && AtlasFormats.exportProps)
+          ? AtlasFormats.exportProps(f, state.groups) : f;
         lines.push(`[${f.kind}] ${f.name}`);
-        if (f.metrics.lengthMeters !== undefined) lines.push(`  Longueur : ${formatDistance(f.metrics.lengthMeters)}`);
-        if (f.metrics.areaSquareMeters !== undefined) lines.push(`  Surface  : ${formatArea(f.metrics.areaSquareMeters)}`);
+        if (p.groupName) lines.push(`  Couche : ${p.groupName}`);
+        if (p.lengthMeters !== undefined && p.areaSquareMeters === undefined) lines.push(`  Longueur : ${formatDistance(p.lengthMeters)}`);
+        if (p.areaSquareMeters !== undefined) lines.push(`  Surface  : ${formatArea(p.areaSquareMeters)}`);
+        if (p.perimeterMeters !== undefined) lines.push(`  Périmètre : ${formatDistance(p.perimeterMeters)}`);
         const verts = featureVertices(f);
         if (verts.length) {
           lines.push(`  Sommets (${verts.length}) — lat, lon | X, Y Lambert :`);
@@ -9902,6 +10310,22 @@
         lines.push('');
       }
       saveAs(new Blob([lines.join('\n')], { type: 'text/plain' }), 'projet.txt');
+    } else if (format === 'dxf') {
+      if (!window.AtlasFormats) { log.warn('[HydraulicGIS] AtlasFormats missing'); return; }
+      const dxf = AtlasFormats.featuresToDxf(features, state.groups);
+      saveAs(new Blob([dxf], { type: 'application/dxf' }), 'projet.dxf');
+    } else if (format === 'shp') {
+      if (!window.AtlasFormats) { log.warn('[HydraulicGIS] AtlasFormats missing'); return; }
+      AtlasFormats.featuresToShapefileZip(features, state.groups).then((blob) => {
+        saveAs(blob, 'projet-shp.zip');
+      }).catch((err) => {
+        log.warn('[HydraulicGIS] shapefile export failed:', err);
+        const status = document.getElementById('files-status');
+        if (status) {
+          status.className = 'notice notice-error';
+          status.textContent = err.message || String(err);
+        }
+      });
     }
   }
 
@@ -10132,6 +10556,43 @@
     } catch (_) {}
     const exit = document.getElementById('clean-view-exit');
     if (exit) exit.textContent = t('clean_view_exit');
+    try {
+      const drawToggle = document.getElementById('draw-toggle-btn');
+      if (drawToggle) {
+        drawToggle.title = t('draw_tools_toggle');
+        drawToggle.setAttribute('aria-label', t('draw_tools_toggle_aria'));
+      }
+    } catch (_) {}
+    try {
+      if (typeof window.refreshDrawDefaultsLabels === 'function') window.refreshDrawDefaultsLabels();
+    } catch (_) {}
+    try {
+      const mapTitles = {
+        'add-point': 'draw_point',
+        'add-line': 'draw_line',
+        'add-polygon': 'draw_polygon',
+        'add-rectangle': 'draw_rectangle',
+        'add-circle': 'draw_circle',
+      };
+      document.querySelectorAll('#draw-drawer button, .maplibregl-ctrl-group button').forEach((btn) => {
+        const cls = btn.className || '';
+        for (const key of Object.keys(mapTitles)) {
+          if (cls.indexOf(key) !== -1) {
+            btn.title = t(mapTitles[key]);
+            btn.setAttribute('aria-label', t(mapTitles[key]));
+            break;
+          }
+        }
+      });
+      const sel = document.getElementById('hgis-select-btn');
+      if (sel) { sel.title = t('draw_select'); sel.setAttribute('aria-label', t('draw_select_aria')); }
+      const ed = document.getElementById('hgis-edit-btn');
+      if (ed) { ed.title = t('draw_edit'); ed.setAttribute('aria-label', t('draw_edit_aria')); }
+      const del = document.getElementById('hgis-del-btn');
+      if (del) { del.title = t('draw_delete'); del.setAttribute('aria-label', t('draw_delete')); }
+      const multi = document.getElementById('hgis-multi-btn');
+      if (multi) { multi.title = t('draw_multi'); multi.setAttribute('aria-label', t('draw_multi')); }
+    } catch (_) {}
   }
 
   function initAppOptionsUi() {
